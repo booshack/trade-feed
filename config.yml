@@ -24,7 +24,7 @@ archive_months: 0                 # 0 keeps everything; 12 keeps a rolling year
 # search engines (its sitemap). It works through this a few minutes per run, so a year takes
 # a few hours and costs roughly $2-3 once. Those stories have no summary, and their titles
 # are rebuilt from the article's link. Set to 0 to skip; raise it later to go further back.
-backfill_days: 365
+backfill_days: 548                # about 1.5 years
 
 # The feeds to read. Any RSS or Atom URL works.
 # TheWrap's main feed is frozen, so its section feeds are used instead.
