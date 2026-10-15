@@ -1172,12 +1172,13 @@ def plan_site(site: dict, start: int, end: int, polite: Polite) -> tuple[list[di
     return found, f"{len(found)} sitemaps to read", False
 
 
-def read_sitemap(job: dict, site: dict, known: set, cfg: dict, brief: str, key: str, polite: Polite) -> dict:
+def read_sitemap(job: dict, site: dict, known: set, cfg: dict, brief: str, key: str, polite: Polite,
+                 deadline: float) -> dict:
     """Reads one sitemap and sorts (up to ITEM_BATCHES batches of) its articles. Runs in a worker thread."""
     out = {"kept": [], "checked": 0, "offset": job["offset"], "done": False, "usage": {"input": 0, "output": 0},
            "verdicts": []}
     try:
-        return sort_sitemap(job, site, known, cfg, brief, key, polite, out)
+        return sort_sitemap(job, site, known, cfg, brief, key, polite, out, deadline)
     except FetchError as e:
         out["error"] = str(e)
     except ApiProblem as e:
@@ -1187,7 +1188,7 @@ def read_sitemap(job: dict, site: dict, known: set, cfg: dict, brief: str, key: 
     return out
 
 
-def sort_sitemap(job, site, known, cfg, brief, key, polite, out) -> dict:
+def sort_sitemap(job, site, known, cfg, brief, key, polite, out, deadline) -> dict:
     kind, entries = parse_sitemap(polite.get(job["url"]))
     if kind == "index":
         out["expand"] = [loc for loc, _ in entries]
@@ -1214,6 +1215,8 @@ def sort_sitemap(job, site, known, cfg, brief, key, polite, out) -> dict:
     articles.sort(key=lambda a: (-a["published"], a["link"]))
     todo = articles[job["offset"]: job["offset"] + ITEM_BATCHES * PAST_BATCH]
     for i in range(0, len(todo), PAST_BATCH):
+        if time.time() > deadline:
+            break  # time's up: the offset is saved and this sitemap carries on next run
         batch = todo[i:i + PAST_BATCH]
         kept = classify_halving(batch, brief, cfg, key, out["usage"])  # ApiProblem: caller pauses the backfill
         for a in batch:
@@ -1277,6 +1280,19 @@ def run_backfill(cfg, brief, items, archive, key, usage, deadline, log,
     # reached last time. Whole days, so a later extension never splits one.
     want_from = (status["until"] - cfg["backfill_days"] * 86400) // 86400 * 86400
     retry = status.setdefault("retry", {})  # site name -> [from, to, tries]
+    if want_from > status["from"]:
+        # backfill_days was lowered: drop the planned stretch that's now too old. Raising it
+        # again later plans that stretch afresh.
+        for job in status["queue"]:
+            job["start"] = max(job["start"], want_from)
+        status["queue"] = [job for job in status["queue"] if job["end"] > want_from]
+        for name, (frm, to, tries) in list(retry.items()):
+            if to <= want_from:
+                del retry[name]
+            else:
+                retry[name] = [max(frm, want_from), to, tries]
+        log(f"Backfill shortened: now going back to {datetime.fromtimestamp(want_from, timezone.utc):%Y-%m-%d}.")
+        status["from"] = want_from
     ranges = [(name, frm, to, tries) for name, (frm, to, tries) in retry.items() if name in sites]
     retry.clear()
     if want_from < status["from"]:
@@ -1309,7 +1325,7 @@ def run_backfill(cfg, brief, items, archive, key, usage, deadline, log,
                 if job["site"] not in sites or job.get("done"):
                     job["done"] = True
                     continue
-                running[pool.submit(read_sitemap, job, sites[job["site"]], known, cfg, brief, key, polite)] = job
+                running[pool.submit(read_sitemap, job, sites[job["site"]], known, cfg, brief, key, polite, deadline)] = job
             if not running:
                 break
             finished, _ = wait(running, return_when=FIRST_COMPLETED)
