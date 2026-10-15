@@ -1658,15 +1658,16 @@ def render_feed(stories: list[dict], cfg: dict, site: dict) -> str:
     return "\n".join(out) + "\n"
 
 
-def feed_status(health: dict, now: float, tz) -> tuple[bool, str]:
-    """(ok, note) for one source, for the page."""
+def feed_status(health: dict, now: float, tz, swept_until: int = 0) -> tuple[bool, str]:
+    """(ok, note) for one source, for the page. swept_until: how far the safety-net sweep has
+    checked this site's full article list, which settles whether a busy spell lost anything."""
     if health.get("error"):
         since = short_date(datetime.fromtimestamp(health.get("failing_since", now), tz))
         return False, f"not loading since {since}: {health['error']}"
     newest = health.get("newest")
     if newest and now - newest > STALE_HOURS * 3600:
         return False, f"nothing new since {short_date(datetime.fromtimestamp(newest, tz))}; the feed address may have changed"
-    if health.get("overflow_at") and now - health["overflow_at"] < 86400:
+    if health.get("overflow_at") and now - health["overflow_at"] < 86400 and swept_until <= health["overflow_at"]:
         return False, "busy enough that a few articles may have been missed"
     if not health.get("loaded"):
         return False, "not checked yet"
@@ -1748,7 +1749,8 @@ def render_page(stories, items, meta, cfg, site, labels, now, backfill) -> str:
                        "checked as soon as it's fixed.")
     sources, problems = [], 0
     for feed in cfg["feeds"]:
-        ok, note = feed_status(meta.get("feeds", {}).get(feed["url"], {}), now, tz)
+        swept = (meta.get("sweep") or {}).get(feed["name"], {}).get("covered_until", 0)
+        ok, note = feed_status(meta.get("feeds", {}).get(feed["url"], {}), now, tz, swept)
         problems += not ok
         mark = '<span class="ok">✓</span>' if ok else '<span class="bad">⚠</span>'
         sources.append(f"<li>{mark} {h(labels[feed['url']])}{' · ' + h(note) if note else ''}</li>")
