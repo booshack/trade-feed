@@ -27,6 +27,10 @@ jobs:
       publish: ${{ steps.decide.outputs.publish }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          # The branch as it is now, not as it was when this run was queued: a run that
+          # waited behind another must start from the state that run saved.
+          ref: ${{ github.ref }}
 
       - uses: actions/setup-python@v7
         with:
