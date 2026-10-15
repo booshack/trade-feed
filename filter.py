@@ -1138,7 +1138,9 @@ def fill_archive_previews(archive: Archive, deadline: float, log, skip_hosts: se
     for month in months:
         for e in archive.load(month).values():
             host = urlsplit(e["link"]).netloc.lower()
-            if e.get("rebuilt") and not e.get("preview_tried") and host not in skip_hosts:
+            # "time_tried" replaced "preview_tried" when publish times were added, so stories
+            # visited before that get one more visit for their time
+            if e.get("rebuilt") and not e.get("exact_time") and not e.get("time_tried") and host not in skip_hosts:
                 by_host.setdefault(host, []).append(e)
     if not by_host:
         return 0
@@ -1154,7 +1156,7 @@ def fill_archive_previews(archive: Archive, deadline: float, log, skip_hosts: se
             if time.time() > deadline:
                 return
             if not robots.can_fetch(ROBOT, e["link"]):
-                e["preview_tried"] = True
+                e["time_tried"] = True
                 continue
             try:
                 preview = page_preview(polite.get(e["link"]))
@@ -1162,10 +1164,10 @@ def fill_archive_previews(archive: Archive, deadline: float, log, skip_hosts: se
                 if blocked(str(err)):
                     return  # the site is refusing us; try again next run
                 if not transient(str(err)):
-                    e["preview_tried"] = True
+                    e["time_tried"] = True
                 continue
             with lock:
-                e["preview_tried"] = True
+                e["time_tried"] = True
                 if preview["image"]:
                     e["image"] = preview["image"]
                     done["photos"] += 1
@@ -1187,7 +1189,7 @@ def fill_archive_previews(archive: Archive, deadline: float, log, skip_hosts: se
 
     with ThreadPoolExecutor(len(by_host)) as pool:
         list(pool.map(lambda kv: work(*kv), by_host.items()))
-    left = sum(1 for es in by_host.values() for e in es if not e.get("preview_tried"))
+    left = sum(1 for es in by_host.values() for e in es if not e.get("time_tried"))
     log(f"Archive photos: read {done['pages']:,} older article pages, {done['photos']:,} photos found, {left:,} to go.")
     return done["pages"]
 
@@ -1679,21 +1681,15 @@ def render_page(stories, items, meta, cfg, site, labels, now, backfill) -> str:
                          f'{h(tag["label"])}<span class="n">{tag_counts[key]}</span></button>')
 
     days: list[str] = []
-    current = None
     for story in recent:
         m = story["main"]
         dt = datetime.fromtimestamp(item_time(m), tz)
-        if dt.date() != current:
-            if current is not None:
-                days.append("</section>")
-            current = dt.date()
-            days.append(f'<section class="day"><h2 class="day" data-day="{dt.date().isoformat()}">{h(day_name(dt))}</h2>')
         cat = category_of(m, cats)
         card = [f'<article class="story" data-cat="{h(m["category"])}" data-tags="{h(" ".join(story_tags(story)))}" '
                 f'style="--c: var(--cat{color.get(m["category"], 0)})">',
                 photo_html(story, m["link"]),
                 f'<div class="meta"><span class="tag">{h(cat["emoji"])} {h(cat["label"])}</span>'
-                f'{tag_spans(story_tags(story), tags)}<span>{h(m["outlet"])} · {clock(dt)}</span></div>',
+                f'{tag_spans(story_tags(story), tags)}<span>{h(m["outlet"])} · {h(short_date(dt))}</span></div>',
                 f'<h3><a href="{h(m["link"])}" target="_blank" rel="noopener">{h(m["title"])}</a></h3>']
         if m.get("summary"):
             card.append(f'<p class="dek">{h(m["summary"])}</p>')
@@ -1705,8 +1701,6 @@ def render_page(stories, items, meta, cfg, site, labels, now, backfill) -> str:
             card.append(f'<p class="also">Also reported by {links}</p>')
         card.append("</article>")
         days.append("".join(card))
-    if current is not None:
-        days.append("</section>")
     if not recent:
         days.append('<p class="empty">Nothing has made the cut yet. Stories appear here as the trades publish them.</p>')
     days.append('<p class="more"><a href="archive.html">Older stories are in the archive →</a></p>')
@@ -1821,13 +1815,11 @@ nav button[aria-pressed="true"] { background: var(--chip-on); color: var(--chip-
 nav .n { margin-left: 6px; opacity: .6; font-variant-numeric: tabular-nums; }
 .banner { margin: 14px 0 0; padding: 12px 14px; border-radius: 10px; background: var(--warn-bg); color: var(--warn-text); font-size: 14px; }
 .banner:last-of-type { margin-bottom: 14px; }
-h2.day { margin: 28px 0 0; padding-bottom: 8px; border-bottom: 1px solid var(--line); color: var(--muted);
-  font-size: 12px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
 .story { display: flow-root; padding: 14px 0; border-bottom: 1px solid var(--line); }
 .photo { float: right; width: 112px; height: 84px; margin: 2px 0 6px 14px; border-radius: 8px; overflow: hidden; background: var(--chip); }
 .photo img { display: block; width: 100%; height: 100%; object-fit: cover; }
 @media (min-width: 560px) { .photo { width: 152px; height: 100px; } }
-main section:last-of-type .story:last-child { border-bottom: 0; }
+main .story:last-of-type { border-bottom: 0; }
 .meta { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: baseline; color: var(--muted); font-size: 13px; }
 .tag { color: var(--c); font-weight: 600; }
 .xtag { padding: 0 7px; border-radius: 999px; background: var(--chip); color: var(--text); font-size: 12px; font-weight: 500; }
@@ -1889,25 +1881,12 @@ $sources
 </div>
 <script>
 (function () {
-  var zone = "$timezone";
-  try {
-    var day = new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" });
-    var today = day.format(new Date()), yesterday = day.format(new Date(Date.now() - 864e5));
-    document.querySelectorAll("h2.day").forEach(function (el) {
-      var d = el.getAttribute("data-day");
-      if (d === today) el.textContent = "Today";
-      else if (d === yesterday) el.textContent = "Yesterday";
-    });
-  } catch (e) {}
   var buttons = document.querySelectorAll("nav button");
   function show(cat) {
     buttons.forEach(function (b) { b.setAttribute("aria-pressed", String(b.getAttribute("data-cat") === cat)); });
     document.querySelectorAll(".story").forEach(function (s) {
       s.hidden = cat !== "all" && s.getAttribute("data-cat") !== cat &&
         (" " + (s.getAttribute("data-tags") || "") + " ").indexOf(" " + cat + " ") === -1;
-    });
-    document.querySelectorAll("section.day").forEach(function (sec) {
-      sec.hidden = !sec.querySelector(".story:not([hidden])");
     });
     try { localStorage.setItem("trade-feed-category", cat); } catch (e) {}
   }
@@ -1960,7 +1939,7 @@ $about
   var buttons = document.querySelectorAll("nav button");
   var view = { cat: "all", month: "", q: "" }, months = [], counts = {}, cache = {}, ticket = 0, timer = null;
   var dayKey = new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" });
-  var dayName = new Intl.DateTimeFormat("en-GB", { timeZone: zone, weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  var dayName = new Intl.DateTimeFormat("en-GB", { timeZone: zone, weekday: "short", day: "numeric", month: "short", year: "numeric" });
   var clock = new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "numeric", minute: "2-digit" });
   var monthName = new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", month: "long", year: "numeric" });
 
@@ -1981,7 +1960,9 @@ $about
   }
   function card(e) {
     var c = cats[e.category] || { emoji: "•", label: e.category, color: 0 };
-    var when = e.rebuilt && !e.exact_time ? "" : " · " + clock.format(new Date(e.time * 1000)).toLowerCase();
+    var d = new Date(e.time * 1000);
+    // backfilled stories get their time once their page has been read; until then just the date
+    var when = " · " + dayName.format(d).replace(/,/g, "") + (e.rebuilt && !e.exact_time ? "" : ", " + clock.format(d).toLowerCase());
     var out = '<article class="story" style="--c: var(--cat' + c.color + ')">' +
       (link(e.image) !== "#" ? '<a class="photo" href="' + link(e.link) +
         '" target="_blank" rel="noopener" tabindex="-1" aria-hidden="true"><img src="' + link(e.image) +
@@ -2004,17 +1985,7 @@ $about
     return out + "</article>";
   }
   function render(entries, words) {
-    var out = [], current = null;
-    entries.forEach(function (e) {
-      var d = new Date(e.time * 1000), key = dayKey.format(d);
-      if (key !== current) {
-        if (current !== null) out.push("</section>");
-        current = key;
-        out.push('<section class="day"><h2 class="day">' + esc(dayName.format(d)) + "</h2>");
-      }
-      out.push(card(e));
-    });
-    if (current !== null) out.push("</section>");
+    var out = entries.map(card);
     list.innerHTML = out.length ? out.join("") :
       '<p class="empty">' + (words.length ? "Nothing matches that search." : "Nothing here yet.") + "</p>";
   }
@@ -2038,7 +2009,7 @@ $about
           (!words.length || matches(e, words));
       });
       all.sort(function (a, b) { return b.time - a.time; });
-      var shown = all.slice(0, 400);
+      var shown = words.length ? all.slice(0, 400) : all;  // a month shows in full; searches show the newest 400
       render(shown, words);
       if (words.length) {
         more.textContent = all.length > shown.length
