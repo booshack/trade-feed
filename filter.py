@@ -234,7 +234,27 @@ def article_id(url: str) -> str:
     parts = urlsplit(url)
     host = parts.netloc.lower()
     host = host[4:] if host.startswith("www.") else host
-    return hashlib.sha1((host + parts.path.rstrip("/").lower()).encode()).hexdigest()[:16]
+    key = host + parts.path.rstrip("/").lower()
+    short = SHORT_LINK.fullmatch(parts.query) if parts.path in ("", "/") else None
+    if short:  # WordPress short links (site.com/?p=123) are different articles, not the home page
+        key += "?p=" + short.group(1)
+    return hashlib.sha1(key.encode()).hexdigest()[:16]
+
+
+SHORT_LINK = re.compile(r"(?:.*&)?p=(\d{4,})(?:&.*)?")
+POST_NUMBER = re.compile(r"-(\d{6,})/?$")
+
+
+def post_key(url: str) -> str:
+    """'variety.com:1236913258' for both an article's full address (which ends in its post number
+    on Deadline, Variety, THR and IndieWire) and its short link (variety.com/?p=1236913258), so
+    the same article arriving under either address is recognised. "" when there's no number."""
+    parts = urlsplit(url or "")
+    host = parts.netloc.lower()
+    host = host[4:] if host.startswith("www.") else host
+    short = SHORT_LINK.fullmatch(parts.query) if parts.path in ("", "/") else None
+    number = short.group(1) if short else (POST_NUMBER.search(parts.path) or [None, None])[1]
+    return f"{host}:{number}" if host and number else ""
 
 
 def item_time(it: dict) -> int:
@@ -360,17 +380,29 @@ def feed_labels(feeds: list[dict]) -> dict[str, str]:
     return labels
 
 
-def intake(articles: list[dict], items: dict, now: float) -> int:
+def known_posts(items: dict) -> set[str]:
+    return {it.get("post") or post_key(it.get("link", "")) for it in items.values()} - {""}
+
+
+def intake(articles: list[dict], items: dict, now: float, posts: set | None = None) -> int:
     added = 0
+    posts = known_posts(items) if posts is None else posts
     for a in articles:
         if a["id"] in items:
             continue
+        a["post"] = post_key(a["link"])
+        if a["post"] and a["post"] in posts:
+            continue  # the same article under its other address
+        if not a["post"]:
+            a.pop("post")
         if a["published"] and a["published"] < now - MAX_AGE_DAYS * 86400:
             continue  # old news: not worth checking
         if a["published"] and a["published"] > now + 3600:
             a["published"] = int(now)  # a clock in the future; don't let it sit on top forever
         a.update(status="pending", attempts=0, first_seen=int(now))
         items[a["id"]] = a
+        if a.get("post"):
+            posts.add(a["post"])
         added += 1
     return added
 
@@ -711,6 +743,8 @@ def prune(items: dict, now: float) -> None:
             del items[id_]
         elif status in ("rejected", "error") and age > RECHECK_HOURS * 3600 and not it.get("recheck"):
             items[id_] = {"id": id_, "status": status, "first_seen": it["first_seen"]}  # just remember the id
+            if it.get("post") or post_key(it.get("link", "")):
+                items[id_]["post"] = it.get("post") or post_key(it.get("link", ""))
     kept = sorted((it for it in items.values() if it["status"] == "kept"), key=lambda it: it["first_seen"])
     for it in kept[:-MAX_KEPT]:
         del items[it["id"]]
@@ -2094,7 +2128,7 @@ def sweep_site(site: dict, start: int, end: int, known: set, polite: Polite, dea
                 id_ = article_id(link)
                 # lastmod is when the article was last *edited*, so this also picks up older
                 # articles edited recently; their page's publish time sorts them out below
-                if when is None or when < start or id_ in known or id_ in candidates:
+                if when is None or when < start or id_ in known or post_key(link) in known or id_ in candidates:
                     continue
                 candidates[id_] = (when, link)
         picked = sorted(candidates.items(), key=lambda kv: -kv[1][0])
@@ -2135,7 +2169,7 @@ def sweep(cfg: dict, items: dict, meta: dict, now: float, log) -> int:
     backfill = load_backfill()
     floor = int(backfill.get("until") or meta.get("started") or now)  # before this, the backfill covers it
     failing = {urlsplit(url).netloc.lower() for url, h in meta.get("feeds", {}).items() if h.get("error")}
-    known = set(items)
+    known = set(items) | known_posts(items)
     archive = Archive(cfg["tz"])
     for months_back in range(0, 2):
         month = month_shift(archive.month_of(now), -months_back)
@@ -2198,8 +2232,11 @@ def main() -> int:
     known = set(items)
     oldest_wanted = now - MAX_AGE_DAYS * 86400
 
+    posts = known_posts(items)
+
     def is_known(a: dict) -> bool:
-        return a["id"] in known or bool(a["published"] and a["published"] < oldest_wanted)
+        return (a["id"] in known or post_key(a["link"]) in posts
+                or bool(a["published"] and a["published"] < oldest_wanted))
 
     health_book = meta.setdefault("feeds", {})
     fresh = 0
@@ -2214,7 +2251,7 @@ def main() -> int:
             print(f"✗ {label}: {e}")
             summary.append(f"- ✗ {label}: {e}")
             continue
-        added = intake(articles, items, now)
+        added = intake(articles, items, now, posts)
         fresh += added
         health.pop("error", None)
         health.pop("failing_since", None)
