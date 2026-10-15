@@ -114,6 +114,7 @@ def load_config() -> dict:
     cfg.setdefault("model", "claude-haiku-5-5")
     cfg.setdefault("effort", "low")
     cfg.setdefault("feed_items", 150)
+    cfg["show_api_calls"] = bool(cfg.get("show_api_calls", True))
     cfg.setdefault("site_url", "")
     cfg["archive_months"] = max(0, int(cfg.get("archive_months") or 0))
     cfg["backfill_days"] = max(0, min(3650, int(cfg.get("backfill_days") or 0)))
@@ -459,6 +460,32 @@ def api_error_text(r: requests.Response) -> str:
         return r.text[:200].strip()
 
 
+SHOW_API_CALLS = False   # set from config.yml's show_api_calls
+API_LOG_LOCK = threading.Lock()
+api_calls = 0
+
+
+def show_api_call(body: dict, r: requests.Response) -> None:
+    """Prints one API call, request and response, as a collapsible section of the Actions log.
+    The API key travels in a header and is never printed."""
+    global api_calls
+    content = body["messages"][0]["content"]
+    count = len(re.findall(r"^\[\d+\]", content, re.M))
+    kind = "backfill" if "headline" in body["output_config"]["format"]["schema"]["properties"]["kept"]["items"]["properties"] else "new"
+    try:
+        response = json.dumps(r.json(), indent=2, ensure_ascii=False)
+    except ValueError:
+        response = "\n".join("  " + line for line in r.text.splitlines())  # never let a line start a workflow command
+    with API_LOG_LOCK:
+        api_calls += 1
+        print(f"::group::Claude API call {api_calls}: {count} {kind} articles → HTTP {r.status_code}", flush=True)
+        print(f"REQUEST  POST {API_URL}  (headers: anthropic-version 2023-06-01; API key not shown)")
+        print(json.dumps(body, indent=2, ensure_ascii=False))
+        print("RESPONSE")
+        print(response)
+        print("::endgroup::", flush=True)
+
+
 def call_claude(body: dict, key: str) -> dict:
     headers = {"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
     for attempt in range(3):
@@ -470,6 +497,8 @@ def call_claude(body: dict, key: str) -> dict:
                 raise ApiProblem("couldn't reach the Claude API") from None
             time.sleep(10 * (attempt + 1))
             continue
+        if SHOW_API_CALLS:
+            show_api_call(body, r)
         if r.status_code == 200:
             try:
                 return r.json()
@@ -1890,7 +1919,9 @@ def write_summary(lines: list[str]) -> None:
 # ------------------------------------------------------------------ main
 
 def main() -> int:
+    global SHOW_API_CALLS
     cfg = load_config()
+    SHOW_API_CALLS = cfg["show_api_calls"]
     brief = load_brief()
     first_run = not STATE_FILE.exists()
     state = load_state()
