@@ -1,0 +1,111 @@
+{
+ "note": "One-off: Variety's backfill sitemaps as saved by run #10, before a block could drop them. Each run adds back any that are missing, once.",
+ "id": "variety-2026-10-15",
+ "queue": [
+  {
+   "end": 1785542400,
+   "offset": 1000,
+   "site": "Variety",
+   "start": 1782864000,
+   "url": "https://variety.com/post-sitemap202607.xml"
+  },
+  {
+   "end": 1782864000,
+   "offset": 1000,
+   "site": "Variety",
+   "start": 1780272000,
+   "url": "https://variety.com/post-sitemap202606.xml"
+  },
+  {
+   "end": 1780272000,
+   "offset": 600,
+   "site": "Variety",
+   "start": 1777593600,
+   "url": "https://variety.com/post-sitemap202605.xml"
+  },
+  {
+   "end": 1777593600,
+   "offset": 0,
+   "site": "Variety",
+   "start": 1775001600,
+   "url": "https://variety.com/post-sitemap202604.xml"
+  },
+  {
+   "end": 1775001600,
+   "offset": 0,
+   "site": "Variety",
+   "start": 1772323200,
+   "url": "https://variety.com/pmc-hubs-pro-sitemap202603.xml"
+  },
+  {
+   "end": 1775001600,
+   "offset": 0,
+   "site": "Variety",
+   "start": 1772323200,
+   "url": "https://variety.com/post-sitemap202603.xml"
+  },
+  {
+   "end": 1772323200,
+   "offset": 0,
+   "site": "Variety",
+   "start": 1769904000,
+   "url": "https://variety.com/pmc-hubs-pro-sitemap202602.xml"
+  },
+  {
+   "end": 1772323200,
+   "offset": 0,
+   "site": "Variety",
+   "start": 1769904000,
+   "url": "https://variety.com/post-sitemap202602.xml"
+  },
+  {
+   "end": 1769904000,
+   "offset": 0,
+   "site": "Variety",
+   "start": 1767225600,
+   "url": "https://variety.com/pmc-hubs-pro-sitemap202601.xml"
+  },
+  {
+   "end": 1769904000,
+   "offset": 0,
+   "site": "Variety",
+   "start": 1767225600,
+   "url": "https://variety.com/post-sitemap202601.xml"
+  },
+  {
+   "end": 1767225600,
+   "offset": 0,
+   "site": "Variety",
+   "start": 1764547200,
+   "url": "https://variety.com/pmc-hubs-pro-sitemap202512.xml"
+  },
+  {
+   "end": 1767225600,
+   "offset": 0,
+   "site": "Variety",
+   "start": 1764547200,
+   "url": "https://variety.com/post-sitemap202512.xml"
+  },
+  {
+   "end": 1764547200,
+   "offset": 0,
+   "site": "Variety",
+   "start": 1761955200,
+   "url": "https://variety.com/pmc-hubs-pro-sitemap202511.xml"
+  },
+  {
+   "end": 1764547200,
+   "offset": 0,
+   "site": "Variety",
+   "start": 1761955200,
+   "url": "https://variety.com/post-sitemap202511.xml"
+  },
+  {
+   "end": 1761955200,
+   "offset": 0,
+   "site": "Variety",
+   "start": 1760486400,
+   "url": "https://variety.com/post-sitemap202510.xml"
+  }
+ ]
+}

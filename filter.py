@@ -75,6 +75,9 @@ ITEM_BATCHES = 10        # requests per sitemap per turn; huge sitemaps carry on
 SITE_GAP = 1.0           # seconds between requests to the same site
 PLAN_FETCHES = 60        # sitemap-index requests per site while planning
 ROBOT = "TradeFeed"      # the name checked against robots.txt rules
+BLOCK_PAUSE_HOURS = 6    # a site that refuses us (403, bot gateway...) is left alone this long
+BLOCK_GIVE_UP_DAYS = 7   # ...and its backfill is only abandoned after refusing for this long
+RESTORE_FILE = ROOT / "backfill-restore.json"  # backfill sitemaps to add back once (see restore_backfill)
 SUMMARY_VERDICTS = 300   # verdicts listed on each run's summary page (the log lists them all)
 PHOTO_FETCHES = 40       # article pages read per run to find photos for kept stories without one
 
@@ -1107,7 +1110,7 @@ def page_photo(raw: bytes) -> str:
     return page_preview(raw)["image"]
 
 
-def fill_archive_previews(archive: Archive, deadline: float, log) -> int:
+def fill_archive_previews(archive: Archive, deadline: float, log, skip_hosts: set = frozenset()) -> int:
     """Gives backfilled archive stories (known only by their link) the photo, real headline and
     summary from their article page. Newest first, one site per thread at SITE_GAP, honouring
     robots.txt; whatever time doesn't allow is picked up next run."""
@@ -1130,8 +1133,9 @@ def fill_archive_previews(archive: Archive, deadline: float, log) -> int:
     by_host: dict[str, list] = {}
     for month in months:
         for e in archive.load(month).values():
-            if e.get("rebuilt") and not e.get("preview_tried"):
-                by_host.setdefault(urlsplit(e["link"]).netloc.lower(), []).append(e)
+            host = urlsplit(e["link"]).netloc.lower()
+            if e.get("rebuilt") and not e.get("preview_tried") and host not in skip_hosts:
+                by_host.setdefault(host, []).append(e)
     if not by_host:
         return 0
     polite, lock, done = Polite(), threading.Lock(), {"pages": 0, "photos": 0}
@@ -1416,6 +1420,8 @@ def run_backfill(cfg, brief, items, archive, key, usage, deadline, log,
             log(f"  {name}: {note}")
         status["queue"].sort(key=lambda q: (-q["end"], q["url"]))
     status["days"] = cfg["backfill_days"]
+    restore_backfill(status, sites, log)
+    paused = status.setdefault("paused", {})  # site name -> {"since": first refusal, "until": next try}
 
     queue, known, problem = status["queue"], set(items), None
     position, running = 0, {}
@@ -1428,6 +1434,8 @@ def run_backfill(cfg, brief, items, archive, key, usage, deadline, log,
                 if job["site"] not in sites or job.get("done"):
                     job["done"] = True
                     continue
+                if time.time() < paused.get(job["site"], {}).get("until", 0):
+                    continue  # the site is refusing us; its work waits, untouched
                 running[pool.submit(read_sitemap, job, sites[job["site"]], known, cfg, brief, key, polite, deadline)] = job
             if not running:
                 break
@@ -1445,10 +1453,22 @@ def run_backfill(cfg, brief, items, archive, key, usage, deadline, log,
                 job["offset"] = result["offset"]
                 if result.get("error"):
                     if blocked(result["error"]):
-                        status["sites"][job["site"]] = f"blocked ({result['error']})"
-                        for other in queue:
-                            if other["site"] == job["site"]:
-                                other["done"] = True
+                        # Usually temporary (bot protection tripped by volume): pause the site and
+                        # keep its work. Only give up after it has refused for BLOCK_GIVE_UP_DAYS.
+                        site, now_ = job["site"], time.time()
+                        pause = paused.setdefault(site, {"since": int(now_)})
+                        pause["until"] = int(now_ + BLOCK_PAUSE_HOURS * 3600)
+                        if now_ - pause["since"] > BLOCK_GIVE_UP_DAYS * 86400:
+                            status["sites"][site] = f"gave up: refused requests for {BLOCK_GIVE_UP_DAYS} days ({result['error']})"
+                            paused.pop(site)
+                            for other in queue:
+                                if other["site"] == site:
+                                    other["done"] = True
+                        else:
+                            again = datetime.fromtimestamp(pause["until"], timezone.utc)
+                            status["sites"][site] = (f"paused: the site is refusing requests ({result['error']}); "
+                                                     f"trying again after {again:%d %b %H:%M} UTC")
+                        log(f"  {site}: {status['sites'][site]}")
                     else:
                         job["tries"] = job.get("tries", 0) + 1
                         job["done"] = job["tries"] >= (8 if transient(result["error"]) else 3)
@@ -1456,6 +1476,9 @@ def run_backfill(cfg, brief, items, archive, key, usage, deadline, log,
                     problem = result["problem"]
                 elif result["done"]:
                     job["done"] = True
+                if not result.get("error") and paused.pop(job["site"], None):
+                    left = sum(1 for q in queue if q["site"] == job["site"] and not q.get("done"))
+                    status["sites"][job["site"]] = f"{left} sitemaps to read (the site is answering again)"
                 for loc in result.get("expand", []):
                     span = sitemap_span(loc) or (job["start"], job["end"])
                     if not SKIP_SITEMAP.search(loc) and span[1] > status["from"] and span[0] < status["until"]:
@@ -1470,6 +1493,29 @@ def run_backfill(cfg, brief, items, archive, key, usage, deadline, log,
     log(f"Backfill: {status['checked']:,} older articles checked, {status['kept']:,} stories added, "
         f"{len(status['queue'])} sitemaps to go.")
     return status, problem
+
+
+def restore_backfill(status: dict, sites: dict, log) -> None:
+    """Adds back, once, backfill sitemaps saved in RESTORE_FILE that are missing from the queue
+    (they were dropped when a site briefly refused us). Their saved progress is kept, so
+    nothing already sorted is sent to Claude again."""
+    if not RESTORE_FILE.exists():
+        return
+    data = json.loads(RESTORE_FILE.read_text(encoding="utf-8"))
+    if data.get("id") in status.setdefault("restored", []):
+        return
+    have = {q["url"] for q in status["queue"]}
+    back = [{**q, "start": max(q["start"], status["from"])} for q in data.get("queue", [])
+            if q["url"] not in have and q["site"] in sites and q["end"] > status["from"]]
+    for q in back:
+        q.pop("done", None)
+        q.pop("tries", None)
+    status["queue"] = sorted(status["queue"] + back, key=lambda q: (-q["end"], q["url"]))
+    for name in {q["site"] for q in back}:
+        left = sum(1 for q in status["queue"] if q["site"] == name)
+        status["sites"][name] = f"{left} sitemaps to read (restored)"
+    status["restored"].append(data.get("id"))
+    log(f"Restored {len(back)} backfill sitemaps from {RESTORE_FILE.name}.")
 
 
 def backfill_progress(status: dict) -> float:
@@ -2128,7 +2174,10 @@ def main() -> int:
     if backfill.get("until"):
         # a few minutes while the backfill is still going, the backfill's whole slot once it's done
         budget = PREVIEW_SECONDS if backfill.get("state") != "done" else BACKFILL_SECONDS
-        fill_archive_previews(archive, time.time() + budget, print)
+        now_ = time.time()
+        paused_hosts = {s["host"] for s in backfill_sites(cfg)
+                        if now_ < (backfill.get("paused") or {}).get(s["name"], {}).get("until", 0)}
+        fill_archive_previews(archive, now_ + budget, print, paused_hosts)
     record_usage(meta, usage, now)
 
     counts = archive.save(cfg["archive_months"], now)
