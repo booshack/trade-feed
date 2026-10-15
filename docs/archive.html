@@ -8,10 +8,10 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>">
 <style>
 :root { --bg: #faf9f6; --text: #1d1c1a; --muted: #6e6a64; --line: #e7e3dc; --chip: #efece6; --chip-on: #1d1c1a;
-  --chip-on-text: #faf9f6; --warn-bg: #fff3e0; --warn-text: #7a4300; --ok: #15803d; --field: #ffffff; --cat0: #2563eb; --cat1: #7c3aed; --cat2: #15803d; --cat3: #b45309; --cat4: #be185d; --cat5: #0e7490; --cat6: #4d7c0f; --cat7: #9f1239;  color-scheme: light dark; }
+  --chip-on-text: #faf9f6; --warn-bg: #fff3e0; --warn-text: #7a4300; --ok: #15803d; --field: #ffffff; --cat0: #2563eb; --cat1: #7c3aed; --cat2: #15803d; --cat3: #b45309; --cat4: #be185d; --cat5: #0e7490; --cat6: #4d7c0f; --cat7: #9f1239; --cat8: #6d28d9; --cat9: #475569; --cat10: #c2410c; --cat11: #0f766e;  color-scheme: light dark; }
 @media (prefers-color-scheme: dark) {
   :root { --bg: #131312; --text: #ecebe8; --muted: #a29e97; --line: #2b2a27; --chip: #23221f; --chip-on: #ecebe8;
-    --chip-on-text: #131312; --warn-bg: #3a2a12; --warn-text: #ffd59e; --ok: #5fd08b; --field: #1c1b19; --cat0: #7aa7ff; --cat1: #b794ff; --cat2: #5fd08b; --cat3: #f2a65a; --cat4: #ff7ab6; --cat5: #4fd1e8; --cat6: #a3d977; --cat7: #ff8fa3;  }
+    --chip-on-text: #131312; --warn-bg: #3a2a12; --warn-text: #ffd59e; --ok: #5fd08b; --field: #1c1b19; --cat0: #7aa7ff; --cat1: #b794ff; --cat2: #5fd08b; --cat3: #f2a65a; --cat4: #ff7ab6; --cat5: #4fd1e8; --cat6: #a3d977; --cat7: #ff8fa3; --cat8: #c4a5ff; --cat9: #a7b4c6; --cat10: #ff9a66; --cat11: #5eead4;  }
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -43,6 +43,7 @@ h2.day { margin: 28px 0 0; padding-bottom: 8px; border-bottom: 1px solid var(--l
 main section:last-of-type .story:last-child { border-bottom: 0; }
 .meta { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: baseline; color: var(--muted); font-size: 13px; }
 .tag { color: var(--c); font-weight: 600; }
+.xtag { padding: 0 7px; border-radius: 999px; background: var(--chip); color: var(--text); font-size: 12px; font-weight: 500; }
 .rebuilt { font-style: italic; }
 .story h3 { margin: 4px 0 0; font-size: 17px; font-weight: 600; line-height: 1.35; }
 .story h3 a { text-decoration: none; }
@@ -80,7 +81,7 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
 <input id="q" type="search" placeholder="Search titles, people, studios" autocomplete="off" enterkeyhint="search" aria-label="Search the archive">
 <select id="month" aria-label="Month"></select>
 </div>
-<nav aria-label="Filter by category"><button type="button" data-cat="all" aria-pressed="true">All</button><button type="button" data-cat="series_order" aria-pressed="false">📺 Series order</button><button type="button" data-cat="pilot" aria-pressed="false">🎬 Pilot</button><button type="button" data-cat="greenlight" aria-pressed="false">🟢 Greenlight</button><button type="button" data-cat="adaptation" aria-pressed="false">📚 Rights &amp; adaptations</button><button type="button" data-cat="casting" aria-pressed="false">🎭 Casting</button><button type="button" data-cat="creative" aria-pressed="false">🎥 Directors &amp; writers</button><button type="button" data-cat="development" aria-pressed="false">🛠️ In development</button><button type="button" data-cat="renewal" aria-pressed="false">🔁 Renewal</button></nav>
+<nav aria-label="Filter by category"><button type="button" data-cat="all" aria-pressed="true">All</button><button type="button" data-cat="ordered" aria-pressed="false">🟢 Ordered &amp; greenlit</button><button type="button" data-cat="casting" aria-pressed="false">🎭 Casting</button><button type="button" data-cat="creative" aria-pressed="false">🎥 Directors &amp; writers</button><button type="button" data-cat="adaptation" aria-pressed="false">📚 Rights &amp; adaptations</button><button type="button" data-cat="development" aria-pressed="false">🛠️ In development</button><button type="button" data-cat="renewal" aria-pressed="false">🔁 Renewal</button><button type="button" data-cat="deals" aria-pressed="false">🤝 Deals &amp; sales</button><button type="button" data-cat="release" aria-pressed="false">📅 Release &amp; first look</button><button type="button" data-cat="cancelled" aria-pressed="false">❌ Cancelled &amp; exits</button><button type="button" data-cat="representation" aria-pressed="false">✍️ Representation</button><button type="button" data-cat="asian" aria-pressed="false">🌏 Asian</button></nav>
 <main id="list"><p class="empty">Loading…</p></main>
 <p class="more" id="more"></p>
 <details><summary>About the archive</summary><ul><li>Kept indefinitely (change <code>archive_months</code> in config.yml).</li></ul></details>
@@ -89,7 +90,8 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
 <script>
 (function () {
   var zone = "Pacific/Auckland";
-  var cats = {"series_order": {"emoji": "📺", "label": "Series order", "color": 0}, "pilot": {"emoji": "🎬", "label": "Pilot", "color": 1}, "greenlight": {"emoji": "🟢", "label": "Greenlight", "color": 2}, "adaptation": {"emoji": "📚", "label": "Rights & adaptations", "color": 3}, "casting": {"emoji": "🎭", "label": "Casting", "color": 4}, "creative": {"emoji": "🎥", "label": "Directors & writers", "color": 5}, "development": {"emoji": "🛠️", "label": "In development", "color": 6}, "renewal": {"emoji": "🔁", "label": "Renewal", "color": 7}};
+  var cats = {"ordered": {"emoji": "🟢", "label": "Ordered & greenlit", "color": 0}, "casting": {"emoji": "🎭", "label": "Casting", "color": 1}, "creative": {"emoji": "🎥", "label": "Directors & writers", "color": 2}, "adaptation": {"emoji": "📚", "label": "Rights & adaptations", "color": 3}, "development": {"emoji": "🛠️", "label": "In development", "color": 4}, "renewal": {"emoji": "🔁", "label": "Renewal", "color": 5}, "deals": {"emoji": "🤝", "label": "Deals & sales", "color": 6}, "release": {"emoji": "📅", "label": "Release & first look", "color": 7}, "cancelled": {"emoji": "❌", "label": "Cancelled & exits", "color": 8}, "representation": {"emoji": "✍️", "label": "Representation", "color": 9}};
+  var tags = {"asian": {"emoji": "🌏", "label": "Asian"}};
   var list = document.getElementById("list"), more = document.getElementById("more");
   var input = document.getElementById("q"), select = document.getElementById("month");
   var buttons = document.querySelectorAll("nav button");
@@ -122,7 +124,11 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
         '" target="_blank" rel="noopener" tabindex="-1" aria-hidden="true"><img src="' + link(e.image) +
         '" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.parentNode.remove()"></a>' : "") +
       '<div class="meta">' +
-      '<span class="tag">' + esc(c.emoji + " " + c.label) + "</span><span>" + esc(e.outlet) + esc(when) + "</span>" +
+      '<span class="tag">' + esc(c.emoji + " " + c.label) + "</span>" +
+      (e.tags || []).filter(function (t) { return tags[t]; }).map(function (t) {
+        return '<span class="xtag">' + esc(tags[t].emoji + " " + tags[t].label) + "</span>";
+      }).join("") +
+      "<span>" + esc(e.outlet) + esc(when) + "</span>" +
       (e.rebuilt ? '<span class="rebuilt">title from link</span>' : "") + "</div>" +
       '<h3><a href="' + link(e.link) + '" target="_blank" rel="noopener">' + esc(e.title) + "</a></h3>";
     if (e.summary) out += '<p class="dek">' + esc(e.summary) + "</p>";
@@ -165,7 +171,8 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
       var all = [];
       parts.forEach(function (p) { all = all.concat(p); });
       all = all.filter(function (e) {
-        return (view.cat === "all" || e.category === view.cat) && (!words.length || matches(e, words));
+        return (view.cat === "all" || e.category === view.cat || (e.tags || []).indexOf(view.cat) !== -1) &&
+          (!words.length || matches(e, words));
       });
       all.sort(function (a, b) { return b.time - a.time; });
       var shown = all.slice(0, 400);

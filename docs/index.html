@@ -5,15 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <title>Trade Feed</title>
-<meta name="description" content="Adaptations, series orders, pilots, greenlights and casting from Deadline, Variety, THR, TheWrap and IndieWire.">
+<meta name="description" content="Orders, greenlights, casting, adaptations, deals and more from Deadline, Variety, THR, TheWrap and IndieWire.">
 <link rel="alternate" type="application/rss+xml" title="Trade Feed" href="feed.xml">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>">
 <style>
 :root { --bg: #faf9f6; --text: #1d1c1a; --muted: #6e6a64; --line: #e7e3dc; --chip: #efece6; --chip-on: #1d1c1a;
-  --chip-on-text: #faf9f6; --warn-bg: #fff3e0; --warn-text: #7a4300; --ok: #15803d; --field: #ffffff; --cat0: #2563eb; --cat1: #7c3aed; --cat2: #15803d; --cat3: #b45309; --cat4: #be185d; --cat5: #0e7490; --cat6: #4d7c0f; --cat7: #9f1239;  color-scheme: light dark; }
+  --chip-on-text: #faf9f6; --warn-bg: #fff3e0; --warn-text: #7a4300; --ok: #15803d; --field: #ffffff; --cat0: #2563eb; --cat1: #7c3aed; --cat2: #15803d; --cat3: #b45309; --cat4: #be185d; --cat5: #0e7490; --cat6: #4d7c0f; --cat7: #9f1239; --cat8: #6d28d9; --cat9: #475569; --cat10: #c2410c; --cat11: #0f766e;  color-scheme: light dark; }
 @media (prefers-color-scheme: dark) {
   :root { --bg: #131312; --text: #ecebe8; --muted: #a29e97; --line: #2b2a27; --chip: #23221f; --chip-on: #ecebe8;
-    --chip-on-text: #131312; --warn-bg: #3a2a12; --warn-text: #ffd59e; --ok: #5fd08b; --field: #1c1b19; --cat0: #7aa7ff; --cat1: #b794ff; --cat2: #5fd08b; --cat3: #f2a65a; --cat4: #ff7ab6; --cat5: #4fd1e8; --cat6: #a3d977; --cat7: #ff8fa3;  }
+    --chip-on-text: #131312; --warn-bg: #3a2a12; --warn-text: #ffd59e; --ok: #5fd08b; --field: #1c1b19; --cat0: #7aa7ff; --cat1: #b794ff; --cat2: #5fd08b; --cat3: #f2a65a; --cat4: #ff7ab6; --cat5: #4fd1e8; --cat6: #a3d977; --cat7: #ff8fa3; --cat8: #c4a5ff; --cat9: #a7b4c6; --cat10: #ff9a66; --cat11: #5eead4;  }
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -45,6 +45,7 @@ h2.day { margin: 28px 0 0; padding-bottom: 8px; border-bottom: 1px solid var(--l
 main section:last-of-type .story:last-child { border-bottom: 0; }
 .meta { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: baseline; color: var(--muted); font-size: 13px; }
 .tag { color: var(--c); font-weight: 600; }
+.xtag { padding: 0 7px; border-radius: 999px; background: var(--chip); color: var(--text); font-size: 12px; font-weight: 500; }
 .rebuilt { font-style: italic; }
 .story h3 { margin: 4px 0 0; font-size: 17px; font-weight: 600; line-height: 1.35; }
 .story h3 a { text-decoration: none; }
@@ -76,10 +77,10 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
 <header>
 <p class="kicker">Development &amp; casting desk</p>
 <h1>Trade Feed</h1>
-<p class="sub">Adaptations, series orders, pilots, greenlights and casting from Deadline, Variety, THR, TheWrap and IndieWire.</p>
-<p class="status">0 stories in the last 7 days · updated Fri 16 Oct, 3:49 am · <a href="archive.html">Archive</a> · <a href="feed.xml">RSS feed</a></p>
+<p class="sub">Orders, greenlights, casting, adaptations, deals and more from Deadline, Variety, THR, TheWrap and IndieWire.</p>
+<p class="status">0 stories in the last 7 days · updated Fri 16 Oct, 4:10 am · <a href="archive.html">Archive</a> · <a href="feed.xml">RSS feed</a></p>
 </header>
-<div class="banner"><strong>The AI filter couldn't run:</strong> the ANTHROPIC_API_KEY secret isn&#x27;t set. 71 articles are waiting and will be checked as soon as it's fixed.</div>
+<div class="banner"><strong>The AI filter couldn't run:</strong> the ANTHROPIC_API_KEY secret isn&#x27;t set. 93 articles are waiting and will be checked as soon as it's fixed.</div>
 <nav aria-label="Filter by category"><button type="button" data-cat="all" aria-pressed="true">All<span class="n">0</span></button></nav>
 <main><p class="empty">Nothing has made the cut yet. Stories appear here as the trades publish them.</p><p class="more"><a href="archive.html">Older stories are in the archive →</a></p></main>
 <details><summary>Filtered out in the last 24 hours (0)</summary><p class="small">Something here you wanted? <a href="https://github.com/booshack/trade-feed/edit/main/criteria.md">Edit criteria.md</a> to describe it in plain English.</p><ul></ul></details>
@@ -102,7 +103,8 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
   function show(cat) {
     buttons.forEach(function (b) { b.setAttribute("aria-pressed", String(b.getAttribute("data-cat") === cat)); });
     document.querySelectorAll(".story").forEach(function (s) {
-      s.hidden = cat !== "all" && s.getAttribute("data-cat") !== cat;
+      s.hidden = cat !== "all" && s.getAttribute("data-cat") !== cat &&
+        (" " + (s.getAttribute("data-tags") || "") + " ").indexOf(" " + cat + " ") === -1;
     });
     document.querySelectorAll("section.day").forEach(function (sec) {
       sec.hidden = !sec.querySelector(".story:not([hidden])");
