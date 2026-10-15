@@ -65,7 +65,7 @@ MAX_ATTEMPTS = 3         # an article Claude can't answer usably about is droppe
 STALE_HOURS = 48         # a feed with nothing new for this long is flagged on the page
 MAX_PAGES = 3            # if every article in a feed is new, also read ?paged=2 and 3
 FILTERED_HOURS = 24      # the page lists what was filtered out in this window
-DETAILS = ("category", "project", "people", "company", "based_on")
+DETAILS = ("category", "project", "people", "company", "based_on", "tags")
 
 BACKFILL_SECONDS = 600   # time each run may spend filling in the archive
 BACKFILL_WORKERS = 4     # sitemaps worked on at once
@@ -79,7 +79,8 @@ PHOTO_FETCHES = 40       # article pages read per run to find photos for kept st
 # Category colours on the page (light, dark), assigned in config.yml order.
 PALETTE = [("#2563eb", "#7aa7ff"), ("#7c3aed", "#b794ff"), ("#15803d", "#5fd08b"),
            ("#b45309", "#f2a65a"), ("#be185d", "#ff7ab6"), ("#0e7490", "#4fd1e8"),
-           ("#4d7c0f", "#a3d977"), ("#9f1239", "#ff8fa3")]
+           ("#4d7c0f", "#a3d977"), ("#9f1239", "#ff8fa3"), ("#6d28d9", "#c4a5ff"),
+           ("#475569", "#a7b4c6"), ("#c2410c", "#ff9a66"), ("#0f766e", "#5eead4")]
 
 
 class FetchError(Exception):
@@ -129,6 +130,14 @@ def load_config() -> dict:
     if not cats:
         sys.exit("config.yml: add at least one category")
     cfg["categories"] = cats
+    tags = {}
+    for key, val in (cfg.get("tags") or {}).items():
+        val = val or {}
+        key = str(key).strip().lower()
+        if key in cats or key == "all":
+            sys.exit(f"config.yml: tag {key!r} has the same name as a category; rename one")
+        tags[key] = {"emoji": str(val.get("emoji", "•")), "label": str(val.get("label", key))}
+    cfg["tags"] = tags
     feeds = []
     for f in cfg.get("feeds") or []:
         if f and f.get("url"):
@@ -362,6 +371,12 @@ def category_keys(cats: dict) -> str:
     return "\n".join(f"- {k} ({v['label']})" for k, v in cats.items())
 
 
+def tag_lines(tags: dict) -> str:
+    if not tags:
+        return ""
+    return f"\n- tags: which of the extra tags in the brief apply ({', '.join(tags)}); [] if none"
+
+
 FIELDS = """- id: the article's number
 - category: the matching category key
 - project: the film or show's title as written, without quotes; "" if it's untitled or unclear
@@ -370,7 +385,7 @@ FIELDS = """- id: the article's number
 - based_on: for adaptations, the source material, worded to follow "Based on" (for example "the novel by Emily Henry"); otherwise \"\""""
 
 
-def system_prompt(brief: str, cats: dict) -> str:
+def system_prompt(brief: str, cats: dict, tags: dict) -> str:
     return f"""You filter Hollywood trade news for one reader. You'll get a numbered list of new articles from outlets such as Deadline, Variety, The Hollywood Reporter, TheWrap and IndieWire. Each article is a line "[number] outlet: headline", usually followed by an indented line with its one-sentence summary.
 
 Decide which articles belong in the reader's feed by following their brief exactly:
@@ -383,12 +398,12 @@ Category keys:
 {category_keys(cats)}
 
 Put every article whose main news fits a category in "kept", with:
-{FIELDS}
+{FIELDS}{tag_lines(tags)}
 
 Put the numbers of all other articles in "rejected". Judge each article by its main news, mostly from the headline, using the summary to clarify. Every number goes in exactly one list."""
 
 
-def past_prompt(brief: str, cats: dict) -> str:
+def past_prompt(brief: str, cats: dict, tags: dict) -> str:
     return f"""You sort older Hollywood trade news into one reader's archive. You'll get a numbered list of articles from outlets such as Deadline, Variety, The Hollywood Reporter, TheWrap and IndieWire. All that's known about each one is the wording of its web address, given as "[number] outlet · date · site section: words from the address".
 
 Decide which articles belong in the archive by following the reader's brief exactly:
@@ -401,13 +416,13 @@ Category keys:
 {category_keys(cats)}
 
 Put every article whose main news clearly fits a category in "kept", with:
-{FIELDS}
+{FIELDS}{tag_lines(tags)}
 - headline: a readable headline made only from the address words: restore capitals, punctuation and quotation marks around titles, but add nothing that isn't in the words
 
 Put the numbers of all other articles in "rejected". Address words are often shortened, so keep an article only when they make its main news clear. Every number goes in exactly one list."""
 
 
-def output_schema(cats: dict, headline: bool = False) -> dict:
+def output_schema(cats: dict, tags: dict, headline: bool = False) -> dict:
     fields = {
         "id": {"type": "integer"},
         "category": {"type": "string", "enum": list(cats)},
@@ -416,6 +431,8 @@ def output_schema(cats: dict, headline: bool = False) -> dict:
         "company": {"type": "string"},
         "based_on": {"type": "string"},
     }
+    if tags:
+        fields["tags"] = {"type": "array", "items": {"type": "string", "enum": list(tags)}}
     if headline:
         fields["headline"] = {"type": "string"}
     return {
@@ -493,13 +510,13 @@ def classify_batch(batch: list[dict], brief: str, cfg: dict, key: str, usage: di
             if it.get("summary"):
                 lines.append(f"    {it['summary']}")
     output_config: dict = {"format": {"type": "json_schema",
-                                      "schema": output_schema(cfg["categories"], headline=past)}}
+                                      "schema": output_schema(cfg["categories"], cfg["tags"], headline=past)}}
     if cfg.get("effort"):
         output_config["effort"] = str(cfg["effort"])
     body = {
         "model": cfg["model"],
         "max_tokens": 16000,
-        "system": (past_prompt if past else system_prompt)(brief, cfg["categories"]),
+        "system": (past_prompt if past else system_prompt)(brief, cfg["categories"], cfg["tags"]),
         "messages": [{"role": "user", "content": "\n".join(lines)}],
         "output_config": output_config,
     }
@@ -534,6 +551,7 @@ def classify_batch(batch: list[dict], brief: str, cfg: dict, key: str, usage: di
             "people": [str(n).strip()[:60] for n in people if str(n).strip()][:8],
             "company": str(p.get("company") or "").strip()[:60],
             "based_on": str(p.get("based_on") or "").strip()[:140],
+            "tags": [t for t in cfg["tags"] if t in (p.get("tags") or [])],
         }
         if past:
             details["headline"] = clean_text(p.get("headline"))[:200]
@@ -591,7 +609,7 @@ def note_failure(batch: list[dict]) -> None:
 
 
 def criteria_signature(brief: str, cfg: dict) -> str:
-    blob = json.dumps({"brief": brief, "categories": cfg["categories"], "model": cfg["model"]}, sort_keys=True)
+    blob = json.dumps({"brief": brief, "categories": cfg["categories"], "tags": cfg["tags"], "model": cfg["model"]}, sort_keys=True)
     return hashlib.sha1(blob.encode()).hexdigest()[:12]
 
 
@@ -724,6 +742,18 @@ def story_photo(story: dict) -> str:
     return next((it["image"] for it in [story["main"], *story["merged"]] if it.get("image")), "")
 
 
+def story_tags(story: dict) -> list[str]:
+    """Extra tags from any report of the story, in the order they first appear."""
+    out: list[str] = []
+    for it in [story["main"], *story["merged"]]:
+        out += [t for t in it.get("tags") or [] if t not in out]
+    return out
+
+
+def tag_spans(keys: list[str], tags: dict) -> str:
+    return "".join(f'<span class="xtag">{h(tags[k]["emoji"])} {h(tags[k]["label"])}</span>' for k in keys if k in tags)
+
+
 def photo_html(story: dict, link: str) -> str:
     photo = story_photo(story)
     if not photo:
@@ -847,6 +877,8 @@ def entry_from_story(story: dict) -> dict:
     for k in ("summary", "based_on", "project", "company", "people"):
         if m.get(k):
             entry[k] = m[k]
+    if story_tags(story):
+        entry["tags"] = story_tags(story)
     if story_photo(story):
         entry["image"] = story_photo(story)
     if story["also"]:
@@ -1128,7 +1160,7 @@ def sort_sitemap(job, site, known, cfg, brief, key, polite, out) -> dict:
                 entry = {"id": a["id"], "time": a["published"], "category": d["category"],
                          "title": d.get("headline") or a["words"].capitalize(), "link": a["link"],
                          "outlet": a["outlet"], "rebuilt": True}
-                for k in ("based_on", "project", "company", "people"):
+                for k in ("based_on", "project", "company", "people", "tags"):
                     if d.get(k):
                         entry[k] = d[k]
                 out["kept"].append(entry)
@@ -1328,7 +1360,9 @@ def render_feed(stories: list[dict], cfg: dict, site: dict) -> str:
         cat = category_of(m, cats)
         photo = story_photo(story)
         body = [f'<p><img src="{h(photo)}" alt=""></p>'] if photo else []
-        body.append(f"<p><b>{h(cat['emoji'])} {h(cat['label'])}</b> · {h(m['outlet'])}</p>")
+        extra = [cfg["tags"][t] for t in story_tags(story) if t in cfg["tags"]]
+        labels = " · ".join(h(f"{c['emoji']} {c['label']}") for c in [cat, *extra])
+        body.append(f"<p><b>{labels}</b> · {h(m['outlet'])}</p>")
         if m.get("summary"):
             body.append(f"<p>{h(m['summary'])}</p>")
         if m.get("based_on"):
@@ -1341,7 +1375,8 @@ def render_feed(stories: list[dict], cfg: dict, site: dict) -> str:
                 f"<link>{x(m['link'])}</link>",
                 f'<guid isPermaLink="true">{x(m["link"])}</guid>',
                 f"<pubDate>{format_datetime(utc(item_time(m)))}</pubDate>",
-                f"<category>{x(cat['label'])}</category>"]
+                f"<category>{x(cat['label'])}</category>",
+                *(f"<category>{x(t['label'])}</category>" for t in extra)]
         if m.get("feed"):
             out.append(f'<source url="{x(m["feed"])}">{x(m["outlet"])}</source>')
         if photo:
@@ -1384,7 +1419,7 @@ def money(meta: dict, cfg: dict, now: float) -> str:
     if not used:
         return ""
     dollars = (used["input"] * cfg["prices"]["input"] + used["output"] * cfg["prices"]["output"]) / 1e6
-    return f" · AI cost this month ≈ {'<$0.01' if dollars < 0.01 else f'${dollars:.2f}'}"
+    return f" · AI cost this month ≈ {'<US$0.01' if dollars < 0.01 else f'US${dollars:.2f}'}"
 
 
 def render_page(stories, items, meta, cfg, site, labels, now, backfill) -> str:
@@ -1395,11 +1430,17 @@ def render_page(stories, items, meta, cfg, site, labels, now, backfill) -> str:
 
     recent = [s for s in stories if item_time(s["main"]) >= anchor - PAGE_DAYS * 86400]
     counts = {key: sum(1 for s in recent if s["main"]["category"] == key) for key in cats}
+    tags = cfg["tags"]
+    tag_counts = {key: sum(1 for s in recent if key in story_tags(s)) for key in tags}
     chips = [f'<button type="button" data-cat="all" aria-pressed="true">All<span class="n">{len(recent)}</span></button>']
     for key, cat in cats.items():
         if counts[key]:
             chips.append(f'<button type="button" data-cat="{h(key)}" aria-pressed="false">{h(cat["emoji"])} '
                          f'{h(cat["label"])}<span class="n">{counts[key]}</span></button>')
+    for key, tag in tags.items():
+        if tag_counts[key]:
+            chips.append(f'<button type="button" data-cat="{h(key)}" aria-pressed="false">{h(tag["emoji"])} '
+                         f'{h(tag["label"])}<span class="n">{tag_counts[key]}</span></button>')
 
     days: list[str] = []
     current = None
@@ -1412,10 +1453,11 @@ def render_page(stories, items, meta, cfg, site, labels, now, backfill) -> str:
             current = dt.date()
             days.append(f'<section class="day"><h2 class="day" data-day="{dt.date().isoformat()}">{h(day_name(dt))}</h2>')
         cat = category_of(m, cats)
-        card = [f'<article class="story" data-cat="{h(m["category"])}" style="--c: var(--cat{color.get(m["category"], 0)})">',
+        card = [f'<article class="story" data-cat="{h(m["category"])}" data-tags="{h(" ".join(story_tags(story)))}" '
+                f'style="--c: var(--cat{color.get(m["category"], 0)})">',
                 photo_html(story, m["link"]),
                 f'<div class="meta"><span class="tag">{h(cat["emoji"])} {h(cat["label"])}</span>'
-                f'<span>{h(m["outlet"])} · {clock(dt)}</span></div>',
+                f'{tag_spans(story_tags(story), tags)}<span>{h(m["outlet"])} · {clock(dt)}</span></div>',
                 f'<h3><a href="{h(m["link"])}" target="_blank" rel="noopener">{h(m["title"])}</a></h3>']
         if m.get("summary"):
             card.append(f'<p class="dek">{h(m["summary"])}</p>')
@@ -1485,7 +1527,8 @@ def render_archive(cfg: dict, meta: dict, backfill: dict, site: dict, counts: di
                           ensure_ascii=False).replace("</", "<\\/")
     chips = ['<button type="button" data-cat="all" aria-pressed="true">All</button>']
     chips += [f'<button type="button" data-cat="{h(k)}" aria-pressed="false">{h(v["emoji"])} {h(v["label"])}</button>'
-              for k, v in cats.items()]
+              for k, v in [*cats.items(), *cfg["tags"].items()]]
+    tag_json = json.dumps(cfg["tags"], ensure_ascii=False).replace("</", "<\\/")
     total = sum(counts.values())
     note = f"{total:,} stor{'ies' if total != 1 else 'y'} kept so far."
     started = meta.get("started")
@@ -1503,7 +1546,8 @@ def render_archive(cfg: dict, meta: dict, backfill: dict, site: dict, counts: di
     footer = ('<a href="./">Latest stories</a> · <a href="feed.xml">RSS feed</a>'
               + (f' · <a href="{h(site["repo"])}">Repo</a>' if site["repo"] else ""))
     return ARCHIVE.substitute(css=css(), title=h(cfg["title"]), note=h(note), chips="".join(chips),
-                              about=about_html, footer=footer, timezone=h(str(cfg["timezone"])), cats=cat_json)
+                              about=about_html, footer=footer, timezone=h(str(cfg["timezone"])), cats=cat_json,
+                              tags=tag_json)
 
 
 def css() -> str:
@@ -1549,6 +1593,7 @@ h2.day { margin: 28px 0 0; padding-bottom: 8px; border-bottom: 1px solid var(--l
 main section:last-of-type .story:last-child { border-bottom: 0; }
 .meta { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: baseline; color: var(--muted); font-size: 13px; }
 .tag { color: var(--c); font-weight: 600; }
+.xtag { padding: 0 7px; border-radius: 999px; background: var(--chip); color: var(--text); font-size: 12px; font-weight: 500; }
 .rebuilt { font-style: italic; }
 .story h3 { margin: 4px 0 0; font-size: 17px; font-weight: 600; line-height: 1.35; }
 .story h3 a { text-decoration: none; }
@@ -1621,7 +1666,8 @@ $sources
   function show(cat) {
     buttons.forEach(function (b) { b.setAttribute("aria-pressed", String(b.getAttribute("data-cat") === cat)); });
     document.querySelectorAll(".story").forEach(function (s) {
-      s.hidden = cat !== "all" && s.getAttribute("data-cat") !== cat;
+      s.hidden = cat !== "all" && s.getAttribute("data-cat") !== cat &&
+        (" " + (s.getAttribute("data-tags") || "") + " ").indexOf(" " + cat + " ") === -1;
     });
     document.querySelectorAll("section.day").forEach(function (sec) {
       sec.hidden = !sec.querySelector(".story:not([hidden])");
@@ -1671,6 +1717,7 @@ $about
 (function () {
   var zone = "$timezone";
   var cats = $cats;
+  var tags = $tags;
   var list = document.getElementById("list"), more = document.getElementById("more");
   var input = document.getElementById("q"), select = document.getElementById("month");
   var buttons = document.querySelectorAll("nav button");
@@ -1703,7 +1750,11 @@ $about
         '" target="_blank" rel="noopener" tabindex="-1" aria-hidden="true"><img src="' + link(e.image) +
         '" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.parentNode.remove()"></a>' : "") +
       '<div class="meta">' +
-      '<span class="tag">' + esc(c.emoji + " " + c.label) + "</span><span>" + esc(e.outlet) + esc(when) + "</span>" +
+      '<span class="tag">' + esc(c.emoji + " " + c.label) + "</span>" +
+      (e.tags || []).filter(function (t) { return tags[t]; }).map(function (t) {
+        return '<span class="xtag">' + esc(tags[t].emoji + " " + tags[t].label) + "</span>";
+      }).join("") +
+      "<span>" + esc(e.outlet) + esc(when) + "</span>" +
       (e.rebuilt ? '<span class="rebuilt">title from link</span>' : "") + "</div>" +
       '<h3><a href="' + link(e.link) + '" target="_blank" rel="noopener">' + esc(e.title) + "</a></h3>";
     if (e.summary) out += '<p class="dek">' + esc(e.summary) + "</p>";
@@ -1746,7 +1797,8 @@ $about
       var all = [];
       parts.forEach(function (p) { all = all.concat(p); });
       all = all.filter(function (e) {
-        return (view.cat === "all" || e.category === view.cat) && (!words.length || matches(e, words));
+        return (view.cat === "all" || e.category === view.cat || (e.tags || []).indexOf(view.cat) !== -1) &&
+          (!words.length || matches(e, words));
       });
       all.sort(function (a, b) { return b.time - a.time; });
       var shown = all.slice(0, 400);

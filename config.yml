@@ -1,7 +1,7 @@
 # Trade Feed settings. What counts as a story you want lives in criteria.md.
 
 title: Trade Feed
-description: Adaptations, series orders, pilots, greenlights and casting from Deadline, Variety, THR, TheWrap and IndieWire.
+description: Orders, greenlights, casting, adaptations, deals and more from Deadline, Variety, THR, TheWrap and IndieWire.
 timezone: Pacific/Auckland        # dates on the page; any name from the tz database works
 
 # Leave blank to use https://<your-username>.github.io/<repo-name>/ automatically.
@@ -44,30 +44,43 @@ feeds:
   - name: IndieWire
     url: https://www.indiewire.com/feed/
 
-# The tags stories get. The keys (series_order, pilot...) are what criteria.md refers to.
-# Add, rename or remove freely; keep criteria.md in step.
+# Each kept story gets exactly one category. The keys (ordered, casting...) are what
+# criteria.md refers to. Add, rename or remove freely; keep criteria.md in step.
 categories:
-  series_order:
-    emoji: "📺"
-    label: Series order
-  pilot:
-    emoji: "🎬"
-    label: Pilot
-  greenlight:
+  ordered:
     emoji: "🟢"
-    label: Greenlight
-  adaptation:
-    emoji: "📚"
-    label: Rights & adaptations
+    label: Ordered & greenlit
   casting:
     emoji: "🎭"
     label: Casting
   creative:
     emoji: "🎥"
     label: Directors & writers
+  adaptation:
+    emoji: "📚"
+    label: Rights & adaptations
   development:
     emoji: "🛠️"
     label: In development
   renewal:
     emoji: "🔁"
     label: Renewal
+  deals:
+    emoji: "🤝"
+    label: Deals & sales
+  release:
+    emoji: "📅"
+    label: Release & first look
+  cancelled:
+    emoji: "❌"
+    label: Cancelled & exits
+  representation:
+    emoji: "✍️"
+    label: Representation
+
+# Extra labels a story can carry on top of its category (any number, or none). Each gets
+# its own filter button. Describe when to use them under "Extra tags" in criteria.md.
+tags:
+  asian:
+    emoji: "🌏"
+    label: Asian
