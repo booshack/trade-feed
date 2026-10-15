@@ -1,11 +1,5 @@
 {
-"status": {"checked": 63938, "days": 365, "from": 1760486400, "kept": 9306, "paused": {}, "planned": 682, "restored": ["variety-2026-10-15"], "retry": {}, "sites": {"Deadline": "31 sitemaps to read", "IndieWire": "23 sitemaps to read", "THR": "30 sitemaps to read", "TheWrap": "550 sitemaps to read", "Variety": "13 sitemaps to read (the site is answering again)"}, "state": "running", "until": 1792077900},
+"status": {"checked": 65874, "days": 365, "from": 1760486400, "kept": 9505, "paused": {}, "planned": 682, "restored": ["variety-2026-10-15"], "retry": {}, "sites": {"Deadline": "31 sitemaps to read", "IndieWire": "23 sitemaps to read", "THR": "30 sitemaps to read", "TheWrap": "550 sitemaps to read", "Variety": "13 sitemaps to read (the site is answering again)"}, "state": "done", "until": 1792077900},
 "queue": [
-{"end": 1777593600, "offset": 1000, "site": "Variety", "start": 1775001600, "url": "https://variety.com/post-sitemap202604.xml"},
-{"end": 1775001600, "offset": 1000, "site": "Variety", "start": 1772323200, "url": "https://variety.com/post-sitemap202603.xml"},
-{"end": 1772323200, "offset": 1000, "site": "Variety", "start": 1769904000, "url": "https://variety.com/post-sitemap202602.xml"},
-{"end": 1769904000, "offset": 1000, "site": "Variety", "start": 1767225600, "url": "https://variety.com/post-sitemap202601.xml"},
-{"end": 1767225600, "offset": 1000, "site": "Variety", "start": 1764547200, "url": "https://variety.com/post-sitemap202512.xml"},
-{"end": 1764547200, "offset": 1000, "site": "Variety", "start": 1761955200, "url": "https://variety.com/post-sitemap202511.xml"}
 ]
 }
