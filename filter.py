@@ -68,6 +68,7 @@ FILTERED_HOURS = 24      # the page lists what was filtered out in this window
 DETAILS = ("category", "project", "people", "company", "based_on", "tags")
 
 BACKFILL_SECONDS = 600   # time each run may spend filling in the archive
+PREVIEW_SECONDS = 240    # time each run may spend fetching photos and headlines for backfilled stories
 BACKFILL_WORKERS = 4     # sitemaps worked on at once
 PAST_BATCH = 100         # older articles per Claude request (they're just a few words each)
 ITEM_BATCHES = 10        # requests per sitemap per turn; huge sitemaps carry on next turn
@@ -1069,16 +1070,90 @@ META_IMAGE = re.compile(r"""(?:property|name)\s*=\s*["'](?:og:image(?::secure_ur
 META_CONTENT = re.compile(r"""\bcontent\s*=\s*["']([^"']+)""", re.I)
 
 
+META_TITLE = re.compile(r"""(?:property|name)\s*=\s*["'](?:og:title|twitter:title)["']""", re.I)
+META_DESC = re.compile(r"""(?:property|name)\s*=\s*["'](?:og:description|twitter:description|description)["']""", re.I)
+OUTLET_SUFFIX = re.compile(r"\s+[|\-–—]\s+(deadline|variety|the hollywood reporter|hollywood reporter|thewrap|the wrap|"
+                           r"indiewire)(\.com)?\s*$", re.I)
+
+
+def page_preview(raw: bytes) -> dict:
+    """What an article page offers for link previews: photo, headline and summary."""
+    head = raw[:2_000_000].decode("utf-8", "replace")  # THR's tags sit ~400KB in, after inline styles
+    head = head.split("</head>", 1)[0]
+    out = {"image": "", "title": "", "summary": ""}
+    for tag in META_TAG.findall(head):
+        found = META_CONTENT.search(tag)
+        if not found:
+            continue
+        value = html.unescape(found.group(1))
+        if META_IMAGE.search(tag) and not out["image"] and clean_link(value):
+            out["image"] = clean_link(value)
+        elif META_TITLE.search(tag) and not out["title"]:
+            out["title"] = OUTLET_SUFFIX.sub("", clean_text(value))
+        elif META_DESC.search(tag) and not out["summary"]:
+            out["summary"] = clean_summary(value)
+    return out
+
+
 def page_photo(raw: bytes) -> str:
     """The photo an article page offers for link previews (og:image / twitter:image)."""
-    head = raw[:2_000_000].decode("utf-8", "replace")  # THR's tag sits ~400KB in, after inline styles
-    head = head.split("</head>", 1)[0]
-    for tag in META_TAG.findall(head):
-        if META_IMAGE.search(tag):
-            found = META_CONTENT.search(tag)
-            if found and clean_link(html.unescape(found.group(1))):
-                return clean_link(html.unescape(found.group(1)))
-    return ""
+    return page_preview(raw)["image"]
+
+
+def fill_archive_previews(archive: Archive, deadline: float, log) -> int:
+    """Gives backfilled archive stories (known only by their link) the photo, real headline and
+    summary from their article page. Newest first, one site per thread at SITE_GAP, honouring
+    robots.txt; whatever time doesn't allow is picked up next run."""
+    index_path = ARCHIVE_DIR / "index.json"
+    months = sorted(json.loads(index_path.read_text(encoding="utf-8")).get("months", {}), reverse=True) \
+        if index_path.exists() else []
+    by_host: dict[str, list] = {}
+    for month in months:
+        for e in archive.load(month).values():
+            if e.get("rebuilt") and not e.get("preview_tried"):
+                by_host.setdefault(urlsplit(e["link"]).netloc.lower(), []).append(e)
+    if not by_host:
+        return 0
+    polite, lock, done = Polite(), threading.Lock(), {"pages": 0, "photos": 0}
+
+    def work(host: str, entries: list) -> None:
+        robots = RobotFileParser()
+        try:
+            robots.parse(polite.get(f"https://{host}/robots.txt").decode("utf-8", "replace").splitlines())
+        except FetchError:
+            robots.parse([])
+        for e in sorted(entries, key=lambda e: e["time"], reverse=True):
+            if time.time() > deadline:
+                return
+            if not robots.can_fetch(ROBOT, e["link"]):
+                e["preview_tried"] = True
+                continue
+            try:
+                preview = page_preview(polite.get(e["link"]))
+            except FetchError as err:
+                if blocked(str(err)):
+                    return  # the site is refusing us; try again next run
+                if not transient(str(err)):
+                    e["preview_tried"] = True
+                continue
+            with lock:
+                e["preview_tried"] = True
+                if preview["image"]:
+                    e["image"] = preview["image"]
+                    done["photos"] += 1
+                if preview["title"]:
+                    e["title"] = preview["title"][:300]
+                    e["page"] = True  # the headline is the real one, not rebuilt from the link
+                if preview["summary"] and not e.get("summary"):
+                    e["summary"] = preview["summary"]
+                archive.touch(e)
+                done["pages"] += 1
+
+    with ThreadPoolExecutor(len(by_host)) as pool:
+        list(pool.map(lambda kv: work(*kv), by_host.items()))
+    left = sum(1 for es in by_host.values() for e in es if not e.get("preview_tried"))
+    log(f"Archive photos: read {done['pages']:,} older article pages, {done['photos']:,} photos found, {left:,} to go.")
+    return done["pages"]
 
 
 def find_photos(items: dict, log) -> int:
@@ -1617,7 +1692,8 @@ def render_archive(cfg: dict, meta: dict, backfill: dict, site: dict, counts: di
     started = meta.get("started")
     if backfill.get("kept") and started:
         note += (f" Stories from before {long_date(datetime.fromtimestamp(started, cfg['tz']))} were filled in "
-                 "afterwards from each site's list of articles, so their titles are rebuilt from the link.")
+                 "afterwards from each site's list of articles. Their photos and headlines are added from the "
+                 "article page over the following runs; until then the title is rebuilt from the link.")
     progress = backfill_note(backfill, cfg)
     if progress:
         note += " " + progress
@@ -1838,7 +1914,7 @@ $about
         return '<span class="xtag">' + esc(tags[t].emoji + " " + tags[t].label) + "</span>";
       }).join("") +
       "<span>" + esc(e.outlet) + esc(when) + "</span>" +
-      (e.rebuilt ? '<span class="rebuilt">title from link</span>' : "") + "</div>" +
+      (e.rebuilt && !e.page ? '<span class="rebuilt">title from link</span>' : "") + "</div>" +
       '<h3><a href="' + link(e.link) + '" target="_blank" rel="noopener">' + esc(e.title) + "</a></h3>";
     if (e.summary) out += '<p class="dek">' + esc(e.summary) + "</p>";
     if (e.based_on) out += '<p class="basis">📖 Based on ' + esc(e.based_on) + "</p>";
@@ -2021,6 +2097,10 @@ def main() -> int:
             exit_code = max(exit_code, record_api(meta, trouble, attempted=True, now=now))
         summary.append(f"- Backfill: {round(backfill_progress(backfill) * 100)}% done, "
                        f"{backfill.get('kept', 0):,} older stories added so far")
+    if backfill.get("until"):
+        # a few minutes while the backfill is still going, the backfill's whole slot once it's done
+        budget = PREVIEW_SECONDS if backfill.get("state") != "done" else BACKFILL_SECONDS
+        fill_archive_previews(archive, time.time() + budget, print)
     record_usage(meta, usage, now)
 
     counts = archive.save(cfg["archive_months"], now)
