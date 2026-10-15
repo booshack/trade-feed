@@ -34,13 +34,11 @@ nav button[aria-pressed="true"] { background: var(--chip-on); color: var(--chip-
 nav .n { margin-left: 6px; opacity: .6; font-variant-numeric: tabular-nums; }
 .banner { margin: 14px 0 0; padding: 12px 14px; border-radius: 10px; background: var(--warn-bg); color: var(--warn-text); font-size: 14px; }
 .banner:last-of-type { margin-bottom: 14px; }
-h2.day { margin: 28px 0 0; padding-bottom: 8px; border-bottom: 1px solid var(--line); color: var(--muted);
-  font-size: 12px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
 .story { display: flow-root; padding: 14px 0; border-bottom: 1px solid var(--line); }
 .photo { float: right; width: 112px; height: 84px; margin: 2px 0 6px 14px; border-radius: 8px; overflow: hidden; background: var(--chip); }
 .photo img { display: block; width: 100%; height: 100%; object-fit: cover; }
 @media (min-width: 560px) { .photo { width: 152px; height: 100px; } }
-main section:last-of-type .story:last-child { border-bottom: 0; }
+main .story:last-of-type { border-bottom: 0; }
 .meta { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: baseline; color: var(--muted); font-size: 13px; }
 .tag { color: var(--c); font-weight: 600; }
 .xtag { padding: 0 7px; border-radius: 999px; background: var(--chip); color: var(--text); font-size: 12px; font-weight: 500; }
@@ -75,7 +73,7 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
 <header>
 <p class="kicker"><a href="./">← Latest stories</a></p>
 <h1>Archive</h1>
-<p class="sub">7,170 stories kept so far. Stories from before 16 October 2026 were filled in afterwards from each site&#x27;s list of articles. Their photos and headlines are added from the article page over the following runs; until then the title is rebuilt from the link. Filling in the past 365 days of the archive: 87% done.</p>
+<p class="sub">8,563 stories kept so far. Stories from before 16 October 2026 were filled in afterwards from each site&#x27;s list of articles. Their photos and headlines are added from the article page over the following runs; until then the title is rebuilt from the link. Filling in the past 365 days of the archive: 98% done.</p>
 </header>
 <div class="controls">
 <input id="q" type="search" placeholder="Search titles, people, studios" autocomplete="off" enterkeyhint="search" aria-label="Search the archive">
@@ -97,7 +95,7 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
   var buttons = document.querySelectorAll("nav button");
   var view = { cat: "all", month: "", q: "" }, months = [], counts = {}, cache = {}, ticket = 0, timer = null;
   var dayKey = new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" });
-  var dayName = new Intl.DateTimeFormat("en-GB", { timeZone: zone, weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  var dayName = new Intl.DateTimeFormat("en-GB", { timeZone: zone, weekday: "short", day: "numeric", month: "short", year: "numeric" });
   var clock = new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "numeric", minute: "2-digit" });
   var monthName = new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", month: "long", year: "numeric" });
 
@@ -118,7 +116,9 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
   }
   function card(e) {
     var c = cats[e.category] || { emoji: "•", label: e.category, color: 0 };
-    var when = e.rebuilt && !e.exact_time ? "" : " · " + clock.format(new Date(e.time * 1000)).toLowerCase();
+    var d = new Date(e.time * 1000);
+    // backfilled stories get their time once their page has been read; until then just the date
+    var when = " · " + dayName.format(d).replace(/,/g, "") + (e.rebuilt && !e.exact_time ? "" : ", " + clock.format(d).toLowerCase());
     var out = '<article class="story" style="--c: var(--cat' + c.color + ')">' +
       (link(e.image) !== "#" ? '<a class="photo" href="' + link(e.link) +
         '" target="_blank" rel="noopener" tabindex="-1" aria-hidden="true"><img src="' + link(e.image) +
@@ -141,17 +141,7 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
     return out + "</article>";
   }
   function render(entries, words) {
-    var out = [], current = null;
-    entries.forEach(function (e) {
-      var d = new Date(e.time * 1000), key = dayKey.format(d);
-      if (key !== current) {
-        if (current !== null) out.push("</section>");
-        current = key;
-        out.push('<section class="day"><h2 class="day">' + esc(dayName.format(d)) + "</h2>");
-      }
-      out.push(card(e));
-    });
-    if (current !== null) out.push("</section>");
+    var out = entries.map(card);
     list.innerHTML = out.length ? out.join("") :
       '<p class="empty">' + (words.length ? "Nothing matches that search." : "Nothing here yet.") + "</p>";
   }
@@ -175,7 +165,7 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
           (!words.length || matches(e, words));
       });
       all.sort(function (a, b) { return b.time - a.time; });
-      var shown = all.slice(0, 400);
+      var shown = words.length ? all.slice(0, 400) : all;  // a month shows in full; searches show the newest 400
       render(shown, words);
       if (words.length) {
         more.textContent = all.length > shown.length
