@@ -1,0 +1,64 @@
+# Trade Feed settings. What counts as a story you want lives in criteria.md.
+
+title: Trade Feed
+description: Adaptations, series orders, pilots, greenlights and casting from Deadline, Variety, THR, TheWrap and IndieWire.
+timezone: Pacific/Auckland        # dates on the page; any name from the tz database works
+
+# Leave blank to use https://<your-username>.github.io/<repo-name>/ automatically.
+site_url: ""
+
+# The model that reads the headlines. Haiku is the cheapest and is plenty for this job.
+model: claude-haiku-5-5
+effort: low                       # low | medium | high (higher = more careful, slower, pricier)
+prices:                           # USD per million tokens, only used to show the cost on the page
+  input: 0.10
+  output: 0.50
+
+# How many stories the RSS feed holds (readers keep older ones once they've seen them).
+feed_items: 150
+
+# Every kept story also goes into the archive (docs/archive/, searchable at archive.html).
+archive_months: 0                 # 0 keeps everything; 12 keeps a rolling year
+
+# Fill the archive with older stories, using the list of articles each site publishes for
+# search engines (its sitemap). It works through this a few minutes per run, so a year takes
+# a few hours and costs roughly $2-3 once. Those stories have no summary, and their titles
+# are rebuilt from the article's link. Set to 0 to skip; raise it later to go further back.
+backfill_days: 365
+
+# The feeds to read. Any RSS or Atom URL works.
+# TheWrap's main feed is frozen, so its section feeds are used instead.
+feeds:
+  - name: Deadline
+    url: https://deadline.com/feed/
+  - name: Variety
+    url: https://variety.com/feed/
+  - name: THR
+    url: https://www.hollywoodreporter.com/feed/
+  - name: TheWrap
+    url: https://www.thewrap.com/media-platforms/tv/feed/
+  - name: TheWrap
+    url: https://www.thewrap.com/creative-content/tv-shows/feed/
+  - name: TheWrap
+    url: https://www.thewrap.com/creative-content/movies/feed/
+  - name: IndieWire
+    url: https://www.indiewire.com/feed/
+
+# The tags stories get. The keys (series_order, pilot...) are what criteria.md refers to.
+# Add, rename or remove freely; keep criteria.md in step.
+categories:
+  series_order:
+    emoji: "📺"
+    label: Series order
+  pilot:
+    emoji: "🎬"
+    label: Pilot
+  greenlight:
+    emoji: "🟢"
+    label: Greenlight
+  adaptation:
+    emoji: "📚"
+    label: Rights & adaptations
+  casting:
+    emoji: "🎭"
+    label: Casting
