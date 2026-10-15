@@ -1072,6 +1072,8 @@ META_CONTENT = re.compile(r"""\bcontent\s*=\s*["']([^"']+)""", re.I)
 
 META_TITLE = re.compile(r"""(?:property|name)\s*=\s*["'](?:og:title|twitter:title)["']""", re.I)
 META_DESC = re.compile(r"""(?:property|name)\s*=\s*["'](?:og:description|twitter:description|description)["']""", re.I)
+META_PUBLISHED = re.compile(r"""(?:property|name|itemprop)\s*=\s*["'](?:article:published_time|datePublished)["']""", re.I)
+LD_PUBLISHED = re.compile(r'"datePublished"\s*:\s*"([^"]+)"')
 OUTLET_SUFFIX = re.compile(r"\s+[|\-–—]\s+(deadline|variety|the hollywood reporter|hollywood reporter|thewrap|the wrap|"
                            r"indiewire)(\.com)?\s*$", re.I)
 
@@ -1080,7 +1082,7 @@ def page_preview(raw: bytes) -> dict:
     """What an article page offers for link previews: photo, headline and summary."""
     head = raw[:2_000_000].decode("utf-8", "replace")  # THR's tags sit ~400KB in, after inline styles
     head = head.split("</head>", 1)[0]
-    out = {"image": "", "title": "", "summary": ""}
+    out = {"image": "", "title": "", "summary": "", "published": None}
     for tag in META_TAG.findall(head):
         found = META_CONTENT.search(tag)
         if not found:
@@ -1092,6 +1094,11 @@ def page_preview(raw: bytes) -> dict:
             out["title"] = OUTLET_SUFFIX.sub("", clean_text(value))
         elif META_DESC.search(tag) and not out["summary"]:
             out["summary"] = clean_summary(value)
+        elif META_PUBLISHED.search(tag) and not out["published"]:
+            out["published"] = parse_iso(value)
+    if not out["published"]:  # structured data, which may sit outside <head>
+        found = LD_PUBLISHED.search(raw[:2_000_000].decode("utf-8", "replace"))
+        out["published"] = parse_iso(found.group(1)) if found else None
     return out
 
 
@@ -1107,6 +1114,19 @@ def fill_archive_previews(archive: Archive, deadline: float, log) -> int:
     index_path = ARCHIVE_DIR / "index.json"
     months = sorted(json.loads(index_path.read_text(encoding="utf-8")).get("months", {}), reverse=True) \
         if index_path.exists() else []
+    # Articles a site keeps updating (running "movies sold so far" lists) turn up in several
+    # months of its sitemaps; keep one copy, preferring one whose real time is known.
+    copies: dict[str, list] = {}
+    for month in months:
+        for e in archive.load(month).values():
+            copies.setdefault(e["id"], []).append((month, e))
+    for found in copies.values():
+        if len(found) > 1:
+            found.sort(key=lambda me: (not me[1].get("exact_time"), me[1]["time"]))
+            for month, e in found[1:]:
+                archive.months[month].pop(e["id"], None)
+                archive.timeline.pop(month, None)
+                archive.dirty.add(month)
     by_host: dict[str, list] = {}
     for month in months:
         for e in archive.load(month).values():
@@ -1146,6 +1166,14 @@ def fill_archive_previews(archive: Archive, deadline: float, log) -> int:
                     e["page"] = True  # the headline is the real one, not rebuilt from the link
                 if preview["summary"] and not e.get("summary"):
                     e["summary"] = preview["summary"]
+                published = preview["published"]
+                if published and 0 < published <= time.time() + 3600:
+                    # sitemaps give the last-edited time; the page gives the real publish time
+                    if published != e["time"]:
+                        archive.remove(e["id"], e["time"])
+                        e["time"] = published
+                        archive.put(e)
+                    e["exact_time"] = True
                 archive.touch(e)
                 done["pages"] += 1
 
@@ -1903,7 +1931,7 @@ $about
   }
   function card(e) {
     var c = cats[e.category] || { emoji: "•", label: e.category, color: 0 };
-    var when = e.rebuilt ? "" : " · " + clock.format(new Date(e.time * 1000)).toLowerCase();
+    var when = e.rebuilt && !e.exact_time ? "" : " · " + clock.format(new Date(e.time * 1000)).toLowerCase();
     var out = '<article class="story" style="--c: var(--cat' + c.color + ')">' +
       (link(e.image) !== "#" ? '<a class="photo" href="' + link(e.link) +
         '" target="_blank" rel="noopener" tabindex="-1" aria-hidden="true"><img src="' + link(e.image) +
