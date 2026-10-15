@@ -111,3 +111,28 @@ jobs:
     steps:
       - id: deploy
         uses: actions/deploy-pages@v5
+
+  # GitHub's schedule is best effort: a new repository can go hours without a scheduled
+  # run, and busy periods drop some. So each run also starts the next one, about 15 minutes
+  # after it began (straight away if it took longer). The schedule above stays as a backup.
+  # "Disable workflow" in the Actions tab stops the chain.
+  next:
+    needs: [update, publish]
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Start the next run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          started=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .run_started_at)
+          elapsed=$(( $(date +%s) - $(date -d "$started" +%s) ))
+          wait=$(( 900 - elapsed ))
+          if [ "$wait" -gt 0 ]; then
+            echo "Next run in $wait seconds."
+            sleep "$wait"
+          fi
+          gh workflow run update.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"
+          echo "Started the next run."
