@@ -77,7 +77,7 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
 <input id="q" type="search" placeholder="Search titles, people, studios" autocomplete="off" enterkeyhint="search" aria-label="Search the archive">
 <select id="month" aria-label="Month"></select>
 </div>
-<nav aria-label="Filter by category"><button type="button" data-cat="all" aria-pressed="true">All</button><button type="button" data-cat="series_order" aria-pressed="false">📺 Series order</button><button type="button" data-cat="pilot" aria-pressed="false">🎬 Pilot</button><button type="button" data-cat="greenlight" aria-pressed="false">🟢 Greenlight</button><button type="button" data-cat="adaptation" aria-pressed="false">📚 Rights &amp; adaptations</button><button type="button" data-cat="casting" aria-pressed="false">🎭 Casting</button></nav>
+<nav aria-label="Filter by category"><button type="button" data-cat="all" aria-pressed="true">All</button><button type="button" data-cat="series_order" aria-pressed="false">📺 Series order</button><button type="button" data-cat="pilot" aria-pressed="false">🎬 Pilot</button><button type="button" data-cat="greenlight" aria-pressed="false">🟢 Greenlight</button><button type="button" data-cat="adaptation" aria-pressed="false">📚 Rights &amp; adaptations</button><button type="button" data-cat="casting" aria-pressed="false">🎭 Casting</button><button type="button" data-cat="creative" aria-pressed="false">🎥 Directors &amp; writers</button><button type="button" data-cat="development" aria-pressed="false">🛠️ In development</button><button type="button" data-cat="renewal" aria-pressed="false">🔁 Renewal</button></nav>
 <main id="list"><p class="empty">Loading…</p></main>
 <p class="more" id="more"></p>
 <details><summary>About the archive</summary><ul><li>Kept indefinitely (change <code>archive_months</code> in config.yml).</li></ul></details>
@@ -86,7 +86,7 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
 <script>
 (function () {
   var zone = "Pacific/Auckland";
-  var cats = {"series_order": {"emoji": "📺", "label": "Series order", "color": 0}, "pilot": {"emoji": "🎬", "label": "Pilot", "color": 1}, "greenlight": {"emoji": "🟢", "label": "Greenlight", "color": 2}, "adaptation": {"emoji": "📚", "label": "Rights & adaptations", "color": 3}, "casting": {"emoji": "🎭", "label": "Casting", "color": 4}};
+  var cats = {"series_order": {"emoji": "📺", "label": "Series order", "color": 0}, "pilot": {"emoji": "🎬", "label": "Pilot", "color": 1}, "greenlight": {"emoji": "🟢", "label": "Greenlight", "color": 2}, "adaptation": {"emoji": "📚", "label": "Rights & adaptations", "color": 3}, "casting": {"emoji": "🎭", "label": "Casting", "color": 4}, "creative": {"emoji": "🎥", "label": "Directors & writers", "color": 5}, "development": {"emoji": "🛠️", "label": "In development", "color": 6}, "renewal": {"emoji": "🔁", "label": "Renewal", "color": 7}};
   var list = document.getElementById("list"), more = document.getElementById("more");
   var input = document.getElementById("q"), select = document.getElementById("month");
   var buttons = document.querySelectorAll("nav button");
