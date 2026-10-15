@@ -75,13 +75,13 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
 <header>
 <p class="kicker"><a href="./">← Latest stories</a></p>
 <h1>Archive</h1>
-<p class="sub">2,047 stories kept so far. Stories from before 16 October 2026 were filled in afterwards from each site&#x27;s list of articles, so their titles are rebuilt from the link. Filling in the past 548 days of the archive: 15% done.</p>
+<p class="sub">3,632 stories kept so far. Stories from before 16 October 2026 were filled in afterwards from each site&#x27;s list of articles. Their photos and headlines are added from the article page over the following runs; until then the title is rebuilt from the link. Filling in the past 365 days of the archive: 60% done.</p>
 </header>
 <div class="controls">
 <input id="q" type="search" placeholder="Search titles, people, studios" autocomplete="off" enterkeyhint="search" aria-label="Search the archive">
 <select id="month" aria-label="Month"></select>
 </div>
-<nav aria-label="Filter by category"><button type="button" data-cat="all" aria-pressed="true">All</button><button type="button" data-cat="ordered" aria-pressed="false">🟢 Ordered &amp; greenlit</button><button type="button" data-cat="casting" aria-pressed="false">🎭 Casting</button><button type="button" data-cat="creative" aria-pressed="false">🎥 Directors &amp; writers</button><button type="button" data-cat="adaptation" aria-pressed="false">📚 Rights &amp; adaptations</button><button type="button" data-cat="development" aria-pressed="false">🛠️ In development</button><button type="button" data-cat="renewal" aria-pressed="false">🔁 Renewal</button><button type="button" data-cat="deals" aria-pressed="false">🤝 Deals &amp; sales</button><button type="button" data-cat="release" aria-pressed="false">📅 Release &amp; first look</button><button type="button" data-cat="cancelled" aria-pressed="false">❌ Cancelled &amp; exits</button><button type="button" data-cat="representation" aria-pressed="false">✍️ Representation</button><button type="button" data-cat="asian" aria-pressed="false">🌏 Asian</button></nav>
+<nav aria-label="Filter by category"><button type="button" data-cat="all" aria-pressed="true">All</button><button type="button" data-cat="ordered" aria-pressed="false">🟢 Ordered &amp; greenlit</button><button type="button" data-cat="casting" aria-pressed="false">🎭 Casting</button><button type="button" data-cat="creative" aria-pressed="false">🎥 Directors &amp; writers</button><button type="button" data-cat="adaptation" aria-pressed="false">📚 Rights &amp; adaptations</button><button type="button" data-cat="development" aria-pressed="false">🛠️ In development</button><button type="button" data-cat="renewal" aria-pressed="false">🔁 Renewal</button><button type="button" data-cat="deals" aria-pressed="false">🤝 Deals &amp; sales</button><button type="button" data-cat="release" aria-pressed="false">📅 Release &amp; first look</button><button type="button" data-cat="cancelled" aria-pressed="false">🛑 Cancelled &amp; exits</button><button type="button" data-cat="representation" aria-pressed="false">✍️ Representation</button><button type="button" data-cat="asian" aria-pressed="false">🌏 Asian</button></nav>
 <main id="list"><p class="empty">Loading…</p></main>
 <p class="more" id="more"></p>
 <details><summary>About the archive</summary><ul><li>Kept indefinitely (change <code>archive_months</code> in config.yml).</li><li>Deadline: 31 sitemaps to read</li><li>IndieWire: 23 sitemaps to read</li><li>THR: 30 sitemaps to read</li><li>TheWrap: 550 sitemaps to read</li><li>Variety: 48 sitemaps to read</li></ul></details>
@@ -90,7 +90,7 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
 <script>
 (function () {
   var zone = "Pacific/Auckland";
-  var cats = {"ordered": {"emoji": "🟢", "label": "Ordered & greenlit", "color": 0}, "casting": {"emoji": "🎭", "label": "Casting", "color": 1}, "creative": {"emoji": "🎥", "label": "Directors & writers", "color": 2}, "adaptation": {"emoji": "📚", "label": "Rights & adaptations", "color": 3}, "development": {"emoji": "🛠️", "label": "In development", "color": 4}, "renewal": {"emoji": "🔁", "label": "Renewal", "color": 5}, "deals": {"emoji": "🤝", "label": "Deals & sales", "color": 6}, "release": {"emoji": "📅", "label": "Release & first look", "color": 7}, "cancelled": {"emoji": "❌", "label": "Cancelled & exits", "color": 8}, "representation": {"emoji": "✍️", "label": "Representation", "color": 9}};
+  var cats = {"ordered": {"emoji": "🟢", "label": "Ordered & greenlit", "color": 0}, "casting": {"emoji": "🎭", "label": "Casting", "color": 1}, "creative": {"emoji": "🎥", "label": "Directors & writers", "color": 2}, "adaptation": {"emoji": "📚", "label": "Rights & adaptations", "color": 3}, "development": {"emoji": "🛠️", "label": "In development", "color": 4}, "renewal": {"emoji": "🔁", "label": "Renewal", "color": 5}, "deals": {"emoji": "🤝", "label": "Deals & sales", "color": 6}, "release": {"emoji": "📅", "label": "Release & first look", "color": 7}, "cancelled": {"emoji": "🛑", "label": "Cancelled & exits", "color": 8}, "representation": {"emoji": "✍️", "label": "Representation", "color": 9}};
   var tags = {"asian": {"emoji": "🌏", "label": "Asian"}};
   var list = document.getElementById("list"), more = document.getElementById("more");
   var input = document.getElementById("q"), select = document.getElementById("month");
@@ -129,7 +129,7 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
         return '<span class="xtag">' + esc(tags[t].emoji + " " + tags[t].label) + "</span>";
       }).join("") +
       "<span>" + esc(e.outlet) + esc(when) + "</span>" +
-      (e.rebuilt ? '<span class="rebuilt">title from link</span>' : "") + "</div>" +
+      (e.rebuilt && !e.page ? '<span class="rebuilt">title from link</span>' : "") + "</div>" +
       '<h3><a href="' + link(e.link) + '" target="_blank" rel="noopener">' + esc(e.title) + "</a></h3>";
     if (e.summary) out += '<p class="dek">' + esc(e.summary) + "</p>";
     if (e.based_on) out += '<p class="basis">📖 Based on ' + esc(e.based_on) + "</p>";
