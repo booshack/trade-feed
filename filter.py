@@ -74,6 +74,7 @@ ITEM_BATCHES = 10        # requests per sitemap per turn; huge sitemaps carry on
 SITE_GAP = 1.0           # seconds between requests to the same site
 PLAN_FETCHES = 60        # sitemap-index requests per site while planning
 ROBOT = "TradeFeed"      # the name checked against robots.txt rules
+SUMMARY_VERDICTS = 300   # verdicts listed on each run's summary page (the log lists them all)
 PHOTO_FETCHES = 40       # article pages read per run to find photos for kept stories without one
 
 # Category colours on the page (light, dark), assigned in config.yml order.
@@ -563,7 +564,8 @@ def waiting(items: dict) -> list[dict]:
     return [it for it in items.values() if it["status"] == "pending" or it.get("recheck")]
 
 
-def classify_waiting(items: dict, brief: str, cfg: dict, key: str, usage: dict, log) -> ApiProblem | None:
+def classify_waiting(items: dict, brief: str, cfg: dict, key: str, usage: dict, log,
+                     verdicts: list) -> ApiProblem | None:
     # Newest first, and at most MAX_BATCHES per run, so a backlog (say, after the API key
     # was missing for a while) catches up over a few runs instead of timing one out.
     queue_items = sorted(waiting(items), key=item_time, reverse=True)[: BATCH_SIZE * MAX_BATCHES]
@@ -595,7 +597,37 @@ def classify_waiting(items: dict, brief: str, cfg: dict, key: str, usage: dict, 
                 it["status"] = "rejected"
                 for k in DETAILS:
                     it.pop(k, None)
+            verdicts.append(verdict(it, kept.get(it["id"]), it["title"], cfg))
+            log("  " + verdict_line(verdicts[-1]))
     return None
+
+
+def verdict(it: dict, details: dict | None, title: str, cfg: dict) -> dict:
+    """What Haiku decided about one article, for the run log and summary."""
+    v = {"kept": bool(details), "outlet": it["outlet"], "title": title, "label": ""}
+    if details:
+        cat = category_of(details, cfg["categories"])
+        extra = [cfg["tags"][t] for t in details.get("tags") or [] if t in cfg["tags"]]
+        v["label"] = " · ".join(f"{c['emoji']} {c['label']}" for c in [cat, *extra])
+    return v
+
+
+def verdict_line(v: dict) -> str:
+    return f"✅ {v['label']}  —  {v['outlet']}: {v['title']}" if v["kept"] else f"❌ {v['outlet']}: {v['title']}"
+
+
+def verdict_table(title: str, verdicts: list[dict]) -> list[str]:
+    if not verdicts:
+        return []
+    kept = sum(v["kept"] for v in verdicts)
+    cell = lambda t: str(t).replace("|", "\\|").replace("\n", " ")
+    lines = ["", f"#### {title}: ✅ {kept} kept · ❌ {len(verdicts) - kept} rejected", "",
+             "| | Category | Outlet | Headline |", "|---|---|---|---|"]
+    lines += [f"| {'✅' if v['kept'] else '❌'} | {cell(v['label'])} | {cell(v['outlet'])} | {cell(v['title'])} |"
+              for v in verdicts[:SUMMARY_VERDICTS]]
+    if len(verdicts) > SUMMARY_VERDICTS:
+        lines += ["", f"…and {len(verdicts) - SUMMARY_VERDICTS:,} more in the log."]
+    return lines
 
 
 def note_failure(batch: list[dict]) -> None:
@@ -1113,7 +1145,8 @@ def plan_site(site: dict, start: int, end: int, polite: Polite) -> tuple[list[di
 
 def read_sitemap(job: dict, site: dict, known: set, cfg: dict, brief: str, key: str, polite: Polite) -> dict:
     """Reads one sitemap and sorts (up to ITEM_BATCHES batches of) its articles. Runs in a worker thread."""
-    out = {"kept": [], "checked": 0, "offset": job["offset"], "done": False, "usage": {"input": 0, "output": 0}}
+    out = {"kept": [], "checked": 0, "offset": job["offset"], "done": False, "usage": {"input": 0, "output": 0},
+           "verdicts": []}
     try:
         return sort_sitemap(job, site, known, cfg, brief, key, polite, out)
     except FetchError as e:
@@ -1156,6 +1189,7 @@ def sort_sitemap(job, site, known, cfg, brief, key, polite, out) -> dict:
         kept = classify_halving(batch, brief, cfg, key, out["usage"])  # ApiProblem: caller pauses the backfill
         for a in batch:
             d = kept.get(a["id"])
+            out["verdicts"].append(verdict(a, d, (d or {}).get("headline") or a["words"].capitalize(), cfg))
             if d:
                 entry = {"id": a["id"], "time": a["published"], "category": d["category"],
                          "title": d.get("headline") or a["words"].capitalize(), "link": a["link"],
@@ -1200,7 +1234,8 @@ def dump_backfill(status: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def run_backfill(cfg, brief, items, archive, key, usage, deadline, log) -> tuple[dict, ApiProblem | None]:
+def run_backfill(cfg, brief, items, archive, key, usage, deadline, log,
+                 verdicts: list) -> tuple[dict, ApiProblem | None]:
     """Spends until `deadline` filling the archive back to backfill_days before the first run."""
     status = load_backfill()
     now = time.time()
@@ -1255,6 +1290,9 @@ def run_backfill(cfg, brief, items, archive, key, usage, deadline, log) -> tuple
                 usage["input"] += result["usage"]["input"]
                 usage["output"] += result["usage"]["output"]
                 status["checked"] += result["checked"]
+                verdicts += result["verdicts"]
+                for v in result["verdicts"]:
+                    log("  " + verdict_line(v))
                 status["kept"] += sum(archive.add(e) for e in result["kept"])
                 job["offset"] = result["offset"]
                 if result.get("error"):
@@ -1904,6 +1942,8 @@ def main() -> int:
             del health_book[url]
 
     usage = {"input": 0, "output": 0}
+    live_verdicts: list[dict] = []
+    past_verdicts: list[dict] = []
     queued = waiting(items)
     problem = None
     if queued:
@@ -1911,7 +1951,7 @@ def main() -> int:
             problem = ApiProblem("the ANTHROPIC_API_KEY secret isn't set", urgent=True)
         else:
             print(f"Asking Claude about {len(queued)} articles…")
-            problem = classify_waiting(items, brief, cfg, key, usage, print)
+            problem = classify_waiting(items, brief, cfg, key, usage, print, live_verdicts)
     exit_code = record_api(meta, problem, attempted=bool(queued), now=now)
     if first_run and exit_code:
         # The run that starts when the files are first uploaded often comes before the key
@@ -1927,7 +1967,9 @@ def main() -> int:
 
     backfill = load_backfill()
     if cfg["backfill_days"] and key and not (problem and problem.urgent):
-        backfill, trouble = run_backfill(cfg, brief, items, archive, key, usage, time.time() + BACKFILL_SECONDS, print)
+        print("Backfill (older articles, judged from their links):")
+        backfill, trouble = run_backfill(cfg, brief, items, archive, key, usage, time.time() + BACKFILL_SECONDS, print,
+                                         past_verdicts)
         if trouble and trouble.urgent:
             exit_code = max(exit_code, record_api(meta, trouble, attempted=True, now=now))
         summary.append(f"- Backfill: {round(backfill_progress(backfill) * 100)}% done, "
@@ -1954,6 +1996,8 @@ def main() -> int:
     if problem:
         print(f"! {problem}")
         summary.append(f"- ⚠ Claude: {problem}")
+    summary += verdict_table("New articles", live_verdicts)
+    summary += verdict_table("Backfill (older articles; titles rebuilt from links)", past_verdicts)
     write_summary(summary)
     return exit_code
 

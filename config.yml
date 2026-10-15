@@ -72,7 +72,7 @@ categories:
     emoji: "📅"
     label: Release & first look
   cancelled:
-    emoji: "❌"
+    emoji: "🛑"
     label: Cancelled & exits
   representation:
     emoji: "✍️"
