@@ -74,6 +74,7 @@ ITEM_BATCHES = 10        # requests per sitemap per turn; huge sitemaps carry on
 SITE_GAP = 1.0           # seconds between requests to the same site
 PLAN_FETCHES = 60        # sitemap-index requests per site while planning
 ROBOT = "TradeFeed"      # the name checked against robots.txt rules
+PHOTO_FETCHES = 40       # article pages read per run to find photos for kept stories without one
 
 # Category colours on the page (light, dark), assigned in config.yml order.
 PALETTE = [("#2563eb", "#7aa7ff"), ("#7c3aed", "#b794ff"), ("#15803d", "#5fd08b"),
@@ -274,8 +275,27 @@ def parse_feed(raw: bytes, feed: dict) -> list[dict]:
             "link": link,
             "summary": clean_summary(e.get("summary") or e.get("description")),
             "published": calendar.timegm(stamp) if stamp else None,
+            "image": feed_image(e),
         })
     return articles
+
+
+IMG_SRC = re.compile(r"<img\b[^>]*?\bsrc\s*=\s*[\"']([^\"']+)", re.I)
+
+
+def feed_image(e) -> str:
+    """The article's photo as the feed gives it: media tags, an image enclosure, or the first <img>."""
+    for media in (e.get("media_content") or []) + (e.get("media_thumbnail") or []):
+        if media.get("medium", "image") == "image" and clean_link(html.unescape(media.get("url") or "")):
+            return clean_link(html.unescape(media["url"]))
+    for enc in e.get("enclosures") or []:
+        if str(enc.get("type", "")).startswith("image/") and clean_link(enc.get("href")):
+            return clean_link(enc["href"])
+    for part in [c.get("value", "") for c in e.get("content") or []] + [e.get("summary") or ""]:
+        found = IMG_SRC.search(part)
+        if found and clean_link(html.unescape(found.group(1))):
+            return clean_link(html.unescape(found.group(1)))
+    return ""
 
 
 def page_url(url: str, n: int) -> str:
@@ -699,6 +719,20 @@ def build_stories(items: dict) -> list[dict]:
     return stories
 
 
+def story_photo(story: dict) -> str:
+    """The lead report's photo, or failing that one from another outlet's report."""
+    return next((it["image"] for it in [story["main"], *story["merged"]] if it.get("image")), "")
+
+
+def photo_html(story: dict, link: str) -> str:
+    photo = story_photo(story)
+    if not photo:
+        return ""
+    return (f'<a class="photo" href="{h(link)}" target="_blank" rel="noopener" tabindex="-1" aria-hidden="true">'
+            f'<img src="{h(photo)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" '
+            f'onerror="this.parentNode.remove()"></a>')
+
+
 # ------------------------------------------------------------------ the archive
 
 def month_shift(month: str, delta: int) -> str:
@@ -813,6 +847,8 @@ def entry_from_story(story: dict) -> dict:
     for k in ("summary", "based_on", "project", "company", "people"):
         if m.get(k):
             entry[k] = m[k]
+    if story_photo(story):
+        entry["image"] = story_photo(story)
     if story["also"]:
         entry["also"] = [{"outlet": o["outlet"], "link": o["link"]} for o in story["also"]]
     return entry
@@ -933,6 +969,54 @@ class Polite:
         if start > now:
             time.sleep(start - now)
         return fetch_bytes(url)
+
+
+META_TAG = re.compile(r"<meta\b[^>]*>", re.I)
+META_IMAGE = re.compile(r"""(?:property|name)\s*=\s*["'](?:og:image(?::secure_url|:url)?|twitter:image(?::src)?)["']""", re.I)
+META_CONTENT = re.compile(r"""\bcontent\s*=\s*["']([^"']+)""", re.I)
+
+
+def page_photo(raw: bytes) -> str:
+    """The photo an article page offers for link previews (og:image / twitter:image)."""
+    head = raw[:2_000_000].decode("utf-8", "replace")  # THR's tag sits ~400KB in, after inline styles
+    head = head.split("</head>", 1)[0]
+    for tag in META_TAG.findall(head):
+        if META_IMAGE.search(tag):
+            found = META_CONTENT.search(tag)
+            if found and clean_link(html.unescape(found.group(1))):
+                return clean_link(html.unescape(found.group(1)))
+    return ""
+
+
+def find_photos(items: dict, log) -> int:
+    """Reads the article page of kept stories whose feed had no photo (THR and IndieWire
+    don't include one), at most PHOTO_FETCHES a run, newest first, honouring robots.txt."""
+    todo = sorted((it for it in items.values()
+                   if it["status"] == "kept" and not it.get("image") and not it.get("photo_tried")),
+                  key=item_time, reverse=True)[:PHOTO_FETCHES]
+    polite, robots, found = Polite(), {}, 0
+    for it in todo:
+        parts = urlsplit(it["link"])
+        root = f"{parts.scheme}://{parts.netloc}"
+        if root not in robots:
+            robots[root] = RobotFileParser()
+            try:
+                robots[root].parse(polite.get(root + "/robots.txt").decode("utf-8", "replace").splitlines())
+            except FetchError:
+                robots[root].parse([])
+        it["photo_tried"] = True
+        if not robots[root].can_fetch(ROBOT, it["link"]):
+            continue
+        try:
+            it["image"] = page_photo(polite.get(it["link"]))
+        except FetchError as e:
+            if transient(str(e)):
+                it.pop("photo_tried")  # try again next run
+            continue
+        found += bool(it["image"])
+    if todo:
+        log(f"Looked for photos on {len(todo)} article pages, found {found}.")
+    return found
 
 
 def backfill_sites(cfg: dict) -> list[dict]:
@@ -1228,7 +1312,7 @@ def render_feed(stories: list[dict], cfg: dict, site: dict) -> str:
     cats = cfg["categories"]
     shown = stories[: int(cfg["feed_items"])]
     out = ['<?xml version="1.0" encoding="UTF-8"?>',
-           '<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">',
+           '<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:media="http://search.yahoo.com/mrss/">',
            "<channel>",
            f"<title>{x(cfg['title'])}</title>",
            f"<link>{x(site['base'] or site['repo'] or 'https://github.com/')}</link>",
@@ -1242,7 +1326,9 @@ def render_feed(stories: list[dict], cfg: dict, site: dict) -> str:
     for story in shown:
         m = story["main"]
         cat = category_of(m, cats)
-        body = [f"<p><b>{h(cat['emoji'])} {h(cat['label'])}</b> · {h(m['outlet'])}</p>"]
+        photo = story_photo(story)
+        body = [f'<p><img src="{h(photo)}" alt=""></p>'] if photo else []
+        body.append(f"<p><b>{h(cat['emoji'])} {h(cat['label'])}</b> · {h(m['outlet'])}</p>")
         if m.get("summary"):
             body.append(f"<p>{h(m['summary'])}</p>")
         if m.get("based_on"):
@@ -1258,6 +1344,8 @@ def render_feed(stories: list[dict], cfg: dict, site: dict) -> str:
                 f"<category>{x(cat['label'])}</category>"]
         if m.get("feed"):
             out.append(f'<source url="{x(m["feed"])}">{x(m["outlet"])}</source>')
+        if photo:
+            out.append(f'<media:content url="{x(photo)}" medium="image"/>')
         out += [f"<description>{x(''.join(body))}</description>", "</item>"]
     out += ["</channel>", "</rss>"]
     return "\n".join(out) + "\n"
@@ -1325,6 +1413,7 @@ def render_page(stories, items, meta, cfg, site, labels, now, backfill) -> str:
             days.append(f'<section class="day"><h2 class="day" data-day="{dt.date().isoformat()}">{h(day_name(dt))}</h2>')
         cat = category_of(m, cats)
         card = [f'<article class="story" data-cat="{h(m["category"])}" style="--c: var(--cat{color.get(m["category"], 0)})">',
+                photo_html(story, m["link"]),
                 f'<div class="meta"><span class="tag">{h(cat["emoji"])} {h(cat["label"])}</span>'
                 f'<span>{h(m["outlet"])} · {clock(dt)}</span></div>',
                 f'<h3><a href="{h(m["link"])}" target="_blank" rel="noopener">{h(m["title"])}</a></h3>']
@@ -1453,7 +1542,10 @@ nav .n { margin-left: 6px; opacity: .6; font-variant-numeric: tabular-nums; }
 .banner:last-of-type { margin-bottom: 14px; }
 h2.day { margin: 28px 0 0; padding-bottom: 8px; border-bottom: 1px solid var(--line); color: var(--muted);
   font-size: 12px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
-.story { padding: 14px 0; border-bottom: 1px solid var(--line); }
+.story { display: flow-root; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.photo { float: right; width: 112px; height: 84px; margin: 2px 0 6px 14px; border-radius: 8px; overflow: hidden; background: var(--chip); }
+.photo img { display: block; width: 100%; height: 100%; object-fit: cover; }
+@media (min-width: 560px) { .photo { width: 152px; height: 100px; } }
 main section:last-of-type .story:last-child { border-bottom: 0; }
 .meta { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: baseline; color: var(--muted); font-size: 13px; }
 .tag { color: var(--c); font-weight: 600; }
@@ -1606,7 +1698,11 @@ $about
   function card(e) {
     var c = cats[e.category] || { emoji: "•", label: e.category, color: 0 };
     var when = e.rebuilt ? "" : " · " + clock.format(new Date(e.time * 1000)).toLowerCase();
-    var out = '<article class="story" style="--c: var(--cat' + c.color + ')"><div class="meta">' +
+    var out = '<article class="story" style="--c: var(--cat' + c.color + ')">' +
+      (link(e.image) !== "#" ? '<a class="photo" href="' + link(e.link) +
+        '" target="_blank" rel="noopener" tabindex="-1" aria-hidden="true"><img src="' + link(e.image) +
+        '" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.parentNode.remove()"></a>' : "") +
+      '<div class="meta">' +
       '<span class="tag">' + esc(c.emoji + " " + c.label) + "</span><span>" + esc(e.outlet) + esc(when) + "</span>" +
       (e.rebuilt ? '<span class="rebuilt">title from link</span>' : "") + "</div>" +
       '<h3><a href="' + link(e.link) + '" target="_blank" rel="noopener">' + esc(e.title) + "</a></h3>";
@@ -1771,6 +1867,7 @@ def main() -> int:
         meta["api"].pop("alerted", None)
         exit_code = 0
 
+    find_photos(items, print)
     prune(items, now)
     stories = build_stories(items)
     archive = Archive(cfg["tz"])
