@@ -64,14 +64,17 @@ jobs:
             if git pull -q --rebase origin "$GITHUB_REF_NAME" && git push -q origin "HEAD:$GITHUB_REF_NAME"; then
               exit 0
             fi
+            git rebase --abort 2>/dev/null || true  # never leave half-merged files behind
             sleep 5
           done
+          echo "::error title=Couldn't save::Another update was saved first and this run's changes clash with it. Nothing from this run was saved or published; the next run carries on."
           exit 1
 
       # Publishes when something changed, on manual runs, or if the page isn't live yet.
+      # Never after a failed save: the page must match what's saved.
       - name: Decide whether to publish
         id: decide
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.save.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
           CHANGED: ${{ steps.save.outputs.changed }}
