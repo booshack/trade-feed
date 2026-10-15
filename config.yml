@@ -62,3 +62,12 @@ categories:
   casting:
     emoji: "🎭"
     label: Casting
+  creative:
+    emoji: "🎥"
+    label: Directors & writers
+  development:
+    emoji: "🛠️"
+    label: In development
+  renewal:
+    emoji: "🔁"
+    label: Renewal

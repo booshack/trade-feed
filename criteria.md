@@ -12,7 +12,7 @@ Keep an article only when its **main news** is one of these:
 
 - **series_order**: A network or streamer orders a new show to series, including
   straight-to-series orders and pilots picked up to series. Renewals of existing
-  shows don't count.
+  shows go under renewal instead.
 - **pilot**: A pilot is ordered, or a project lands a pilot production commitment.
 - **greenlight**: A film or show is officially greenlit or set to go into production
   at a studio, network or streamer.
@@ -22,22 +22,26 @@ Keep an article only when its **main news** is one of these:
   announced as being in development.
 - **casting**: An actor is cast in, joins, boards, is set to star in, or is in talks
   for a role in a film or series: lead, series regular, recurring, supporting or voice.
+- **creative**: A director, writer, showrunner or creator attaches to, is hired for,
+  or is in talks for a specific film or series.
+- **development**: A new original (non-adaptation) film or series is set up, in
+  development, or being shopped at a studio, network or streamer, before any pilot
+  order, series order or greenlight. Adaptations in development go under adaptation.
+- **renewal**: An existing series is renewed for another season.
+
+If an article fits more than one, pick the category for its biggest news (a series
+order beats casting, a greenlight beats development).
 
 # What I don't want
 
-Everything else, including: renewals and cancellations, release and premiere dates,
+Everything else, including: cancellations, release and premiere dates,
 trailers and first looks, reviews, box office, ratings and viewership, interviews and
 profiles, recaps, awards and festival coverage, obituaries, executive moves and
 business news (mergers, earnings, layoffs), overall deals, agency signings, and
 opinion or analysis pieces.
 
-Original (non-adaptation) projects that are only "in development" don't count until
-they get a pilot order, series order or greenlight.
-
-<!-- Want those development stories too? Delete the paragraph above. -->
-
 # When in doubt
 
-Leave it out.
+Keep it.
 
-<!-- Rather see borderline stories than miss one? Change "Leave it out." to "Keep it." -->
+<!-- Feed too noisy? Change "Keep it." to "Leave it out." -->

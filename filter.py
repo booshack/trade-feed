@@ -669,7 +669,7 @@ def same_news(a: dict, b: dict) -> bool:
     pa, pb = (p if not p.startswith("untitled") else "" for p in (norm(a.get("project")), norm(b.get("project"))))
     project = similar(pa, pb)
     shared_people = bool(surnames(a.get("people")) & surnames(b.get("people")))
-    if a["category"] == "casting":
+    if a["category"] in ("casting", "creative"):
         return shared_people and (project >= 0.8 or not (pa and pb))
     if pa and pb:
         return project >= 0.85
