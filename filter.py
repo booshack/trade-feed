@@ -75,6 +75,10 @@ ITEM_BATCHES = 10        # requests per sitemap per turn; huge sitemaps carry on
 SITE_GAP = 1.0           # seconds between requests to the same site
 PLAN_FETCHES = 60        # sitemap-index requests per site while planning
 ROBOT = "TradeFeed"      # the name checked against robots.txt rules
+SWEEP_HOURS = 48         # the safety-net sweep always re-reads at least this much of each site's sitemaps
+SWEEP_MAX_DAYS = 30      # ...and never reaches back further than this (a bigger gap needs a person)
+SWEEP_PAGES = 60         # article pages read per site per run for the sweep; the rest next run
+SWEEP_SECONDS = 150      # time each run may spend on the sweep
 BLOCK_PAUSE_HOURS = 6    # a site that refuses us (403, bot gateway...) is left alone this long
 BLOCK_GIVE_UP_DAYS = 7   # ...and its backfill is only abandoned after refusing for this long
 RESTORE_FILE = ROOT / "backfill-restore.json"  # backfill sitemaps to add back once (see restore_backfill)
@@ -2084,6 +2088,122 @@ def write_summary(lines: list[str]) -> None:
 
 # ------------------------------------------------------------------ main
 
+# ------------------------------------------------------------------ safety-net sweep
+
+def sweep_site(site: dict, start: int, end: int, known: set, polite: Polite, deadline: float) -> dict:
+    """Unseen articles in a site's sitemaps for [start, end), with their page's real headline,
+    summary, photo and publish time. Runs in a worker thread, one per site."""
+    out = {"articles": [], "old": [], "complete": False, "error": ""}
+    try:
+        jobs, note, _ = plan_site(site, start, end, polite)
+        if not jobs:
+            out["error"] = note
+            return out
+        robots = RobotFileParser()
+        robots.parse(polite.get(site["root"] + "/robots.txt").decode("utf-8", "replace").splitlines())
+        candidates: dict[str, tuple] = {}
+        todo = list(jobs)
+        while todo:
+            job = todo.pop(0)
+            kind, entries = parse_sitemap(polite.get(job["url"]))
+            if kind == "index":  # a sub-index: follow the parts that can cover the window
+                for loc, lastmod in entries:
+                    span = sitemap_span(loc)
+                    if (span and span[1] > start and span[0] < end) or (not span and not (lastmod and lastmod < start)):
+                        if not SKIP_SITEMAP.search(loc):
+                            todo.append({"url": loc, "start": start, "end": end})
+                continue
+            span = sitemap_span(job["url"])
+            for loc, lastmod in entries:
+                link = clean_link(loc)
+                parts = urlsplit(link)
+                if not link or parts.netloc.lower() != site["host"] or SKIP_PATH.search(parts.path + "/"):
+                    continue
+                when = lastmod or (span[0] if span and span[1] - span[0] <= 86400 else None)
+                id_ = article_id(link)
+                # lastmod is when the article was last *edited*, so this also picks up older
+                # articles edited recently; their page's publish time sorts them out below
+                if when is None or when < start or id_ in known or id_ in candidates:
+                    continue
+                candidates[id_] = (when, link)
+        picked = sorted(candidates.items(), key=lambda kv: -kv[1][0])
+        for id_, (when, link) in picked[:SWEEP_PAGES]:
+            if time.time() > deadline:
+                return out  # not complete: the window stays open and the rest is read next run
+            if not robots.can_fetch(ROBOT, link):
+                out["old"].append(id_)
+                continue
+            preview = page_preview(polite.get(link))
+            published = preview["published"] or when
+            if published < start - 3600:
+                out["old"].append(id_)  # an older article edited recently: not news from this window
+                continue
+            words, _ = slug_words(link)
+            out["articles"].append({
+                "id": id_, "outlet": site["name"], "feed": site["root"], "link": link,
+                "title": preview["title"] or words.capitalize(), "summary": preview["summary"],
+                "published": min(int(published), int(time.time())), "image": preview["image"],
+                "photo_tried": True, "swept": True})
+        out["complete"] = len(picked) <= SWEEP_PAGES
+    except FetchError as e:
+        out["error"] = str(e)
+    except Exception as e:  # never let one odd sitemap stop the run
+        out["error"] = f"couldn't read it ({type(e).__name__})"
+    return out
+
+
+def sweep(cfg: dict, items: dict, meta: dict, now: float, log) -> int:
+    """Safety net for the RSS feeds: reads each site's sitemaps (which list everything it
+    publishes) for articles the feeds never delivered, such as other sections, articles that
+    scrolled off during an outage or a late run, and adds them to the queue for sorting.
+
+    Each site's window runs from where the last complete sweep got to (at least SWEEP_HOURS
+    back, at most SWEEP_MAX_DAYS) up to now, so a gap is never skipped: when a site is
+    failing, its window just grows until it answers again."""
+    book = meta.setdefault("sweep", {})
+    backfill = load_backfill()
+    floor = int(backfill.get("until") or meta.get("started") or now)  # before this, the backfill covers it
+    failing = {urlsplit(url).netloc.lower() for url, h in meta.get("feeds", {}).items() if h.get("error")}
+    known = set(items)
+    archive = Archive(cfg["tz"])
+    for months_back in range(0, 2):
+        month = month_shift(archive.month_of(now), -months_back)
+        known |= set(archive.load(month))
+    jobs = []
+    for site in backfill_sites(cfg):
+        if site["host"] in failing:
+            continue  # its feed is down too; the window waits and covers the gap once it's back
+        covered = book.get(site["name"], {}).get("covered_until", floor)
+        start = max(floor, min(covered, int(now - SWEEP_HOURS * 3600)))
+        if start < now - SWEEP_MAX_DAYS * 86400:
+            log(f"Sweep: {site['name']} has a gap of more than {SWEEP_MAX_DAYS} days; only the last "
+                f"{SWEEP_MAX_DAYS} are covered.")
+            start = int(now - SWEEP_MAX_DAYS * 86400)
+        jobs.append((site, start))
+    if not jobs:
+        return 0
+    polite, deadline, added = Polite(), now + SWEEP_SECONDS, 0
+    with ThreadPoolExecutor(len(jobs)) as pool:
+        results = list(pool.map(lambda j: sweep_site(j[0], j[1], int(now), known, polite, deadline), jobs))
+    for (site, start), res in zip(jobs, results):
+        for a in res["articles"]:
+            if a["id"] not in items:
+                a.update(status="pending", attempts=0, first_seen=int(now))
+                items[a["id"]] = a
+                added += 1
+        for id_ in res["old"]:
+            items.setdefault(id_, {"id": id_, "status": "old", "first_seen": int(now)})
+        since = datetime.fromtimestamp(start, timezone.utc)
+        if res["complete"]:
+            book[site["name"]] = {"covered_until": int(now)}
+        if res["error"]:
+            log(f"Sweep: {site['name']}: {res['error']} (covered from {since:%d %b %H:%M} UTC once it works)")
+        elif res["articles"] or not res["complete"]:
+            log(f"Sweep: {site['name']}: {len(res['articles'])} articles the feeds missed since {since:%d %b %H:%M} UTC"
+                + ("" if res["complete"] else "; more next run"))
+    return added
+
+
 def main() -> int:
     global SHOW_API_CALLS
     cfg = load_config()
@@ -2137,6 +2257,10 @@ def main() -> int:
     for url in list(health_book):
         if url not in labels:
             del health_book[url]
+    swept = sweep(cfg, items, meta, now, print)
+    fresh += swept
+    if swept:
+        summary.append(f"- Safety-net sweep: {swept} articles the feeds missed")
 
     usage = {"input": 0, "output": 0}
     live_verdicts: list[dict] = []
