@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import bisect
 import calendar
+import collections
 import difflib
 import hashlib
 import html
@@ -1526,6 +1527,10 @@ def run_backfill(cfg, brief, items, archive, key, usage, deadline, log,
                                       "end": min(span[1], status["until"]), "offset": 0})
                         status["planned"] += 1
     status["queue"] = [q for q in queue if not q.get("done")]
+    left = collections.Counter(q["site"] for q in status["queue"])
+    for name, note in status["sites"].items():
+        if "sitemaps to read" in note:
+            status["sites"][name] = f"{left[name]} sitemaps to read" if left[name] else "done"
     if problem:
         status["state"] = f"paused: {problem}"
     else:
@@ -1791,9 +1796,9 @@ def render_archive(cfg: dict, meta: dict, backfill: dict, site: dict, counts: di
     color = colours(cats)
     cat_json = json.dumps({k: {"emoji": v["emoji"], "label": v["label"], "color": color[k]} for k, v in cats.items()},
                           ensure_ascii=False).replace("</", "<\\/")
-    chips = ['<button type="button" data-cat="all" aria-pressed="true">All</button>']
-    chips += [f'<button type="button" data-cat="{h(k)}" aria-pressed="false">{h(v["emoji"])} {h(v["label"])}</button>'
-              for k, v in [*cats.items(), *cfg["tags"].items()]]
+    chips = ['<button type="button" data-cat="all" aria-pressed="true">All<span class="n"></span></button>']
+    chips += [f'<button type="button" data-cat="{h(k)}" aria-pressed="false">{h(v["emoji"])} {h(v["label"])}'
+              f'<span class="n"></span></button>' for k, v in [*cats.items(), *cfg["tags"].items()]]
     tag_json = json.dumps(cfg["tags"], ensure_ascii=False).replace("</", "<\\/")
     total = sum(counts.values())
     note = f"{total:,} stor{'ies' if total != 1 else 'y'} kept so far."
@@ -2040,6 +2045,17 @@ $about
       if (mine !== ticket) return;
       var all = [];
       parts.forEach(function (p) { all = all.concat(p); });
+      // counts on the category buttons: this month (or these search results), every category
+      var pool = words.length ? all.filter(function (e) { return matches(e, words); }) : all, tally = { all: pool.length };
+      pool.forEach(function (e) {
+        tally[e.category] = (tally[e.category] || 0) + 1;
+        (e.tags || []).forEach(function (t) { tally[t] = (tally[t] || 0) + 1; });
+      });
+      buttons.forEach(function (b) {
+        var k = b.getAttribute("data-cat"), n = tally[k] || 0, span = b.querySelector(".n");
+        if (span) span.textContent = n.toLocaleString();
+        b.hidden = k !== "all" && !n && k !== view.cat;
+      });
       all = all.filter(function (e) {
         return (view.cat === "all" || e.category === view.cat || (e.tags || []).indexOf(view.cat) !== -1) &&
           (!words.length || matches(e, words));
