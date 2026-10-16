@@ -1,5 +1,5 @@
 {
-"status": {"checked": 65874, "days": 365, "from": 1760486400, "kept": 9505, "paused": {}, "planned": 682, "restored": ["variety-2026-10-15"], "retry": {}, "sites": {"Deadline": "31 sitemaps to read", "IndieWire": "23 sitemaps to read", "THR": "30 sitemaps to read", "TheWrap": "550 sitemaps to read", "Variety": "13 sitemaps to read (the site is answering again)"}, "state": "done", "until": 1792077900},
+"status": {"checked": 65874, "days": 365, "from": 1760486400, "kept": 9505, "paused": {}, "planned": 682, "restored": ["variety-2026-10-15"], "retry": {}, "sites": {"Deadline": "done", "IndieWire": "done", "THR": "done", "TheWrap": "done", "Variety": "done"}, "state": "done", "until": 1792077900},
 "queue": [
 ]
 }
