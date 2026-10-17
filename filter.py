@@ -1717,7 +1717,7 @@ def render_page(stories, items, meta, cfg, site, labels, now, backfill) -> str:
                          f'{h(cat["label"])}<span class="n">{counts[key]}</span></button>')
     for key, tag in tags.items():
         if tag_counts[key]:
-            chips.append(f'<button type="button" data-cat="{h(key)}" aria-pressed="false">{h(tag["emoji"])} '
+            chips.append(f'<button type="button" data-cat="{h(key)}" data-kind="tag" aria-pressed="false">{h(tag["emoji"])} '
                          f'{h(tag["label"])}<span class="n">{tag_counts[key]}</span></button>')
 
     days: list[str] = []
@@ -1922,21 +1922,41 @@ $sources
 </div>
 <script>
 (function () {
-  var buttons = document.querySelectorAll("nav button");
-  function show(cat) {
-    buttons.forEach(function (b) { b.setAttribute("aria-pressed", String(b.getAttribute("data-cat") === cat)); });
-    document.querySelectorAll(".story").forEach(function (s) {
-      s.hidden = cat !== "all" && s.getAttribute("data-cat") !== cat &&
-        (" " + (s.getAttribute("data-tags") || "") + " ").indexOf(" " + cat + " ") === -1;
+  // Several buttons can be on at once: a story shows if it's in any chosen category, and has
+  // every chosen tag (so Casting + Asian means Asian casting stories). None chosen = All.
+  var buttons = document.querySelectorAll("nav button"), chosen = [], isTag = {}, present = {};
+  buttons.forEach(function (b) {
+    present[b.getAttribute("data-cat")] = true;
+    if (b.getAttribute("data-kind") === "tag") isTag[b.getAttribute("data-cat")] = true;
+  });
+  function show() {
+    var cats = chosen.filter(function (k) { return !isTag[k]; }), tags = chosen.filter(function (k) { return isTag[k]; });
+    buttons.forEach(function (b) {
+      var k = b.getAttribute("data-cat");
+      b.setAttribute("aria-pressed", String(k === "all" ? !chosen.length : chosen.indexOf(k) !== -1));
     });
-    try { localStorage.setItem("trade-feed-category", cat); } catch (e) {}
+    document.querySelectorAll(".story").forEach(function (s) {
+      var own = " " + (s.getAttribute("data-tags") || "") + " ";
+      s.hidden = !((!cats.length || cats.indexOf(s.getAttribute("data-cat")) !== -1) &&
+                   tags.every(function (t) { return own.indexOf(" " + t + " ") !== -1; }));
+    });
+    try { localStorage.setItem("trade-feed-category", JSON.stringify(chosen)); } catch (e) {}
   }
-  buttons.forEach(function (b) { b.addEventListener("click", function () { show(b.getAttribute("data-cat")); }); });
-  var saved = "all";
-  try { saved = localStorage.getItem("trade-feed-category") || "all"; } catch (e) {}
-  var exists = false;
-  buttons.forEach(function (b) { if (b.getAttribute("data-cat") === saved) exists = true; });
-  show(exists ? saved : "all");
+  buttons.forEach(function (b) {
+    b.addEventListener("click", function () {
+      var k = b.getAttribute("data-cat"), i = chosen.indexOf(k);
+      if (k === "all") chosen = [];
+      else if (i === -1) chosen.push(k);
+      else chosen.splice(i, 1);
+      show();
+    });
+  });
+  try {
+    var saved = localStorage.getItem("trade-feed-category") || "[]";
+    saved = saved.charAt(0) === "[" ? JSON.parse(saved) : [saved];  // older pages saved a single category
+    chosen = saved.filter(function (k) { return k !== "all" && present[k]; });
+  } catch (e) { chosen = []; }
+  show();
 })();
 </script>
 </body>
@@ -1978,7 +1998,7 @@ $about
   var list = document.getElementById("list"), more = document.getElementById("more");
   var input = document.getElementById("q"), select = document.getElementById("month");
   var buttons = document.querySelectorAll("nav button");
-  var view = { cat: "all", month: "", q: "" }, months = [], counts = {}, cache = {}, ticket = 0, timer = null;
+  var view = { cats: [], month: "", q: "" }, months = [], counts = {}, cache = {}, ticket = 0, timer = null;
   var dayKey = new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" });
   var dayName = new Intl.DateTimeFormat("en-GB", { timeZone: zone, weekday: "short", day: "numeric", month: "short", year: "numeric" });
   var clock = new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "numeric", minute: "2-digit" });
@@ -2054,11 +2074,10 @@ $about
       buttons.forEach(function (b) {
         var k = b.getAttribute("data-cat"), n = tally[k] || 0, span = b.querySelector(".n");
         if (span) span.textContent = n.toLocaleString();
-        b.hidden = k !== "all" && !n && k !== view.cat;
+        b.hidden = k !== "all" && !n && view.cats.indexOf(k) === -1;
       });
       all = all.filter(function (e) {
-        return (view.cat === "all" || e.category === view.cat || (e.tags || []).indexOf(view.cat) !== -1) &&
-          (!words.length || matches(e, words));
+        return chosenMatch(e) && (!words.length || matches(e, words));
       });
       all.sort(function (a, b) { return b.time - a.time; });
       var shown = words.length ? all.slice(0, 400) : all;  // a month shows in full; searches show the newest 400
@@ -2088,10 +2107,22 @@ $about
     clearTimeout(timer);
     timer = setTimeout(function () { view.q = input.value.trim(); refresh(); }, 250);
   });
+  // Several buttons can be on at once: any chosen category, and every chosen tag. None = All.
+  function chosenMatch(e) {
+    var cats = view.cats.filter(function (k) { return !tags[k]; }), want = view.cats.filter(function (k) { return tags[k]; });
+    return (!cats.length || cats.indexOf(e.category) !== -1) &&
+      want.every(function (t) { return (e.tags || []).indexOf(t) !== -1; });
+  }
   buttons.forEach(function (b) {
     b.addEventListener("click", function () {
-      view.cat = b.getAttribute("data-cat");
-      buttons.forEach(function (o) { o.setAttribute("aria-pressed", String(o === b)); });
+      var k = b.getAttribute("data-cat"), i = view.cats.indexOf(k);
+      if (k === "all") view.cats = [];
+      else if (i === -1) view.cats.push(k);
+      else view.cats.splice(i, 1);
+      buttons.forEach(function (o) {
+        var ok = o.getAttribute("data-cat");
+        o.setAttribute("aria-pressed", String(ok === "all" ? !view.cats.length : view.cats.indexOf(ok) !== -1));
+      });
       refresh();
     });
   });
