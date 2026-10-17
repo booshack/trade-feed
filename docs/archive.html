@@ -93,7 +93,7 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
   var list = document.getElementById("list"), more = document.getElementById("more");
   var input = document.getElementById("q"), select = document.getElementById("month");
   var buttons = document.querySelectorAll("nav button");
-  var view = { cat: "all", month: "", q: "" }, months = [], counts = {}, cache = {}, ticket = 0, timer = null;
+  var view = { cats: [], month: "", q: "" }, months = [], counts = {}, cache = {}, ticket = 0, timer = null;
   var dayKey = new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" });
   var dayName = new Intl.DateTimeFormat("en-GB", { timeZone: zone, weekday: "short", day: "numeric", month: "short", year: "numeric" });
   var clock = new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "numeric", minute: "2-digit" });
@@ -169,11 +169,10 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
       buttons.forEach(function (b) {
         var k = b.getAttribute("data-cat"), n = tally[k] || 0, span = b.querySelector(".n");
         if (span) span.textContent = n.toLocaleString();
-        b.hidden = k !== "all" && !n && k !== view.cat;
+        b.hidden = k !== "all" && !n && view.cats.indexOf(k) === -1;
       });
       all = all.filter(function (e) {
-        return (view.cat === "all" || e.category === view.cat || (e.tags || []).indexOf(view.cat) !== -1) &&
-          (!words.length || matches(e, words));
+        return chosenMatch(e) && (!words.length || matches(e, words));
       });
       all.sort(function (a, b) { return b.time - a.time; });
       var shown = words.length ? all.slice(0, 400) : all;  // a month shows in full; searches show the newest 400
@@ -203,10 +202,22 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
     clearTimeout(timer);
     timer = setTimeout(function () { view.q = input.value.trim(); refresh(); }, 250);
   });
+  // Several buttons can be on at once: any chosen category, and every chosen tag. None = All.
+  function chosenMatch(e) {
+    var cats = view.cats.filter(function (k) { return !tags[k]; }), want = view.cats.filter(function (k) { return tags[k]; });
+    return (!cats.length || cats.indexOf(e.category) !== -1) &&
+      want.every(function (t) { return (e.tags || []).indexOf(t) !== -1; });
+  }
   buttons.forEach(function (b) {
     b.addEventListener("click", function () {
-      view.cat = b.getAttribute("data-cat");
-      buttons.forEach(function (o) { o.setAttribute("aria-pressed", String(o === b)); });
+      var k = b.getAttribute("data-cat"), i = view.cats.indexOf(k);
+      if (k === "all") view.cats = [];
+      else if (i === -1) view.cats.push(k);
+      else view.cats.splice(i, 1);
+      buttons.forEach(function (o) {
+        var ok = o.getAttribute("data-cat");
+        o.setAttribute("aria-pressed", String(ok === "all" ? !view.cats.length : view.cats.indexOf(ok) !== -1));
+      });
       refresh();
     });
   });
