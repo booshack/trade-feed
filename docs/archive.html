@@ -77,7 +77,7 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
 <header>
 <p class="kicker"><a href="./">← Latest stories</a></p>
 <h1>Archive</h1>
-<p class="sub">9,701 stories kept so far. Stories from before 16 October 2026 were filled in afterwards from each site&#x27;s list of articles. Their photos and headlines are added from the article page over the following runs; until then the title is rebuilt from the link.</p>
+<p class="sub">9,702 stories kept so far. Stories from before 16 October 2026 were filled in afterwards from each site&#x27;s list of articles. Their photos and headlines are added from the article page over the following runs; until then the title is rebuilt from the link.</p>
 </header>
 <div class="sticky">
 <div class="controls">
@@ -132,7 +132,7 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
   }
   function searchWords(q) { return String(q || "").toLowerCase().split(/\s+/).filter(Boolean); }
   function matches(e, words) {
-    var hay = [e.title, e.outlet, e.based_on, e.project, e.company, (e.people || []).join(" ")].join(" ").toLowerCase();
+    var hay = [e.title, e.summary, e.outlet, e.based_on, e.project, e.company, (e.people || []).join(" ")].join(" ").toLowerCase();
     return words.every(function (w) { return hay.indexOf(w) !== -1; });
   }
   // Any chosen category, and every chosen tag (Casting + Asian = Asian casting stories). None = all.
