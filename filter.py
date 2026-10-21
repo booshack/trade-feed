@@ -1710,15 +1710,14 @@ def render_page(stories, items, meta, cfg, site, labels, now, backfill) -> str:
     counts = {key: sum(1 for s in recent if s["main"]["category"] == key) for key in cats}
     tags = cfg["tags"]
     tag_counts = {key: sum(1 for s in recent if key in story_tags(s)) for key in tags}
-    chips = [f'<button type="button" data-cat="all" aria-pressed="true">All<span class="n">{len(recent)}</span></button>']
-    for key, cat in cats.items():
-        if counts[key]:
-            chips.append(f'<button type="button" data-cat="{h(key)}" aria-pressed="false">{h(cat["emoji"])} '
-                         f'{h(cat["label"])}<span class="n">{counts[key]}</span></button>')
-    for key, tag in tags.items():
-        if tag_counts[key]:
-            chips.append(f'<button type="button" data-cat="{h(key)}" data-kind="tag" aria-pressed="false">{h(tag["emoji"])} '
-                         f'{h(tag["label"])}<span class="n">{tag_counts[key]}</span></button>')
+    # Every category gets a button (searches can reach any of them); empty ones start hidden.
+    # data-base keeps this week's count, which the button goes back to when a search is cleared.
+    chips = [f'<button type="button" data-cat="all" data-base="{len(recent)}" aria-pressed="true">All'
+             f'<span class="n">{len(recent)}</span></button>']
+    for key, item, n, kind in ([(k, v, counts[k], "") for k, v in cats.items()]
+                               + [(k, v, tag_counts[k], ' data-kind="tag"') for k, v in tags.items()]):
+        chips.append(f'<button type="button" data-cat="{h(key)}"{kind} data-base="{n}" aria-pressed="false"'
+                     f'{"" if n else " hidden"}>{h(item["emoji"])} {h(item["label"])}<span class="n">{n}</span></button>')
 
     days: list[str] = []
     for story in recent:
@@ -1785,10 +1784,13 @@ def render_page(stories, items, meta, cfg, site, labels, now, backfill) -> str:
     last = short_date(datetime.fromtimestamp(anchor, tz)) if checked else "not yet"
     status = (f"{len(recent)} stor{'ies' if len(recent) != 1 else 'y'} in the last {PAGE_DAYS} days · "
               f"updated {h(last)} · <a href=\"archive.html\">Archive</a> · <a href=\"feed.xml\">RSS feed</a>")
+    cat_json = json.dumps({k: {"emoji": v["emoji"], "label": v["label"], "color": color[k]} for k, v in cats.items()},
+                          ensure_ascii=False).replace("</", "<\\/")
+    tag_json = json.dumps(tags, ensure_ascii=False).replace("</", "<\\/")
     return PAGE.substitute(
         css=css(), title=h(cfg["title"]), description=h(cfg["description"]), status=status, banner=banner,
         chips="".join(chips), days="".join(days), filtered=filtered_html, sources=sources_html,
-        footer=footer, timezone=h(str(cfg["timezone"])))
+        footer=footer, timezone=h(str(cfg["timezone"])), cats=cat_json, tags=tag_json)
 
 
 def render_archive(cfg: dict, meta: dict, backfill: dict, site: dict, counts: dict) -> str:
@@ -1827,6 +1829,85 @@ def css() -> str:
     dark = "".join(f"--cat{i}: {c[1]}; " for i, c in enumerate(PALETTE))
     return CSS.substitute(light=light, dark=dark)
 
+
+
+SHARED_JS = r"""
+  // Shared by the page and the archive: story cards, word search and loading the archive files.
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+  function link(u) { return /^https?:\/\//i.test(u || "") ? esc(u) : "#"; }
+  function makeCard(cats, tags, zone) {
+    var dayName = new Intl.DateTimeFormat("en-GB", { timeZone: zone, weekday: "short", day: "numeric", month: "short", year: "numeric" });
+    var clock = new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "numeric", minute: "2-digit" });
+    return function card(e) {
+      var c = cats[e.category] || { emoji: "•", label: e.category, color: 0 };
+      var d = new Date(e.time * 1000);
+      // backfilled stories get their time once their page has been read; until then just the date
+      var when = " · " + dayName.format(d).replace(/,/g, "") + (e.rebuilt && !e.exact_time ? "" : ", " + clock.format(d).toLowerCase());
+      var out = '<article class="story" style="--c: var(--cat' + c.color + ')">' +
+        (link(e.image) !== "#" ? '<a class="photo" href="' + link(e.link) +
+          '" target="_blank" rel="noopener" tabindex="-1" aria-hidden="true"><img src="' + link(e.image) +
+          '" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.parentNode.remove()"></a>' : "") +
+        '<div class="meta">' +
+        '<span class="tag">' + esc(c.emoji + " " + c.label) + "</span>" +
+        (e.tags || []).filter(function (t) { return tags[t]; }).map(function (t) {
+          return '<span class="xtag">' + esc(tags[t].emoji + " " + tags[t].label) + "</span>";
+        }).join("") +
+        "<span>" + esc(e.outlet) + esc(when) + "</span>" +
+        (e.rebuilt && !e.page ? '<span class="rebuilt">title from link</span>' : "") + "</div>" +
+        '<h3><a href="' + link(e.link) + '" target="_blank" rel="noopener">' + esc(e.title) + "</a></h3>";
+      if (e.summary) out += '<p class="dek">' + esc(e.summary) + "</p>";
+      if (e.based_on) out += '<p class="basis">📖 Based on ' + esc(e.based_on) + "</p>";
+      if (e.also && e.also.length) {
+        out += '<p class="also">Also reported by ' + e.also.map(function (o) {
+          return '<a href="' + link(o.link) + '" target="_blank" rel="noopener">' + esc(o.outlet) + "</a>";
+        }).join(" · ") + "</p>";
+      }
+      return out + "</article>";
+    };
+  }
+  function searchWords(q) { return String(q || "").toLowerCase().split(/\s+/).filter(Boolean); }
+  function matches(e, words) {
+    var hay = [e.title, e.outlet, e.based_on, e.project, e.company, (e.people || []).join(" ")].join(" ").toLowerCase();
+    return words.every(function (w) { return hay.indexOf(w) !== -1; });
+  }
+  // Any chosen category, and every chosen tag (Casting + Asian = Asian casting stories). None = all.
+  function chosenMatch(e, chosen, isTag) {
+    var cs = chosen.filter(function (k) { return !isTag[k]; }), ts = chosen.filter(function (k) { return isTag[k]; });
+    return (!cs.length || cs.indexOf(e.category) !== -1) &&
+      ts.every(function (t) { return (e.tags || []).indexOf(t) !== -1; });
+  }
+  var monthCache = {}, indexCache = null;
+  function loadIndex() {
+    if (!indexCache) indexCache = fetch("archive/index.json").then(function (r) { return r.json(); });
+    return indexCache;
+  }
+  function loadMonth(m) {
+    if (!monthCache[m]) {
+      monthCache[m] = fetch("archive/" + m + ".json").then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      });
+    }
+    return monthCache[m];
+  }
+  // Counts on the category buttons for a set of stories; empty categories hide unless chosen.
+  function tallyButtons(buttons, pool, chosen) {
+    var tally = { all: pool.length };
+    pool.forEach(function (e) {
+      tally[e.category] = (tally[e.category] || 0) + 1;
+      (e.tags || []).forEach(function (t) { tally[t] = (tally[t] || 0) + 1; });
+    });
+    buttons.forEach(function (b) {
+      var k = b.getAttribute("data-cat"), n = tally[k] || 0, span = b.querySelector(".n");
+      if (span) span.textContent = n.toLocaleString();
+      b.hidden = k !== "all" && !n && chosen.indexOf(k) === -1;
+    });
+  }
+"""
 
 CSS = Template("""
 :root { --bg: #faf9f6; --text: #1d1c1a; --muted: #6e6a64; --line: #e7e3dc; --chip: #efece6; --chip-on: #1d1c1a;
@@ -1875,6 +1956,10 @@ main .story:last-of-type { border-bottom: 0; }
 .empty { padding: 40px 0; color: var(--muted); text-align: center; }
 .more { margin: 20px 0 0; color: var(--muted); font-size: 14px; }
 .controls { display: flex; gap: 8px; margin: 4px 0 12px; }
+.sticky { position: sticky; top: 0; z-index: 2; margin: 0 -16px; padding: 10px 16px 0; background: var(--bg);
+  border-bottom: 1px solid var(--line); }
+.sticky .controls { margin: 0; }
+.sticky nav { position: static; margin: 0 -16px; border-bottom: 0; }
 .controls input, .controls select { min-width: 0; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px;
   background: var(--field); color: var(--text); font: inherit; font-size: 16px; }
 .controls input { flex: 1 1 auto; }
@@ -1914,33 +1999,81 @@ PAGE = Template("""<!doctype html>
 <p class="status">$status</p>
 </header>
 $banner
+<div class="sticky">
+<div class="controls">
+<input id="q" type="search" placeholder="Search the whole archive: titles, people, studios" autocomplete="off" enterkeyhint="search" aria-label="Search the whole archive">
+</div>
 <nav aria-label="Filter by category">$chips</nav>
-<main>$days</main>
+</div>
+<main id="feed">$days</main>
+<div id="results" hidden><main id="list"></main><p class="more" id="more"></p></div>
 $filtered
 $sources
 <footer>$footer</footer>
 </div>
 <script>
-(function () {
+(function () {""" + SHARED_JS + """
   // Several buttons can be on at once: a story shows if it's in any chosen category, and has
   // every chosen tag (so Casting + Asian means Asian casting stories). None chosen = All.
   var buttons = document.querySelectorAll("nav button"), chosen = [], isTag = {}, present = {};
+  var card = makeCard($cats, $tags, "$timezone");
+  var input = document.getElementById("q"), feed = document.getElementById("feed");
+  var results = document.getElementById("results"), list = document.getElementById("list"), more = document.getElementById("more");
+  var query = "", ticket = 0, timer = null;
   buttons.forEach(function (b) {
     present[b.getAttribute("data-cat")] = true;
     if (b.getAttribute("data-kind") === "tag") isTag[b.getAttribute("data-cat")] = true;
   });
-  function show() {
-    var cats = chosen.filter(function (k) { return !isTag[k]; }), tags = chosen.filter(function (k) { return isTag[k]; });
+  function press() {
     buttons.forEach(function (b) {
       var k = b.getAttribute("data-cat");
       b.setAttribute("aria-pressed", String(k === "all" ? !chosen.length : chosen.indexOf(k) !== -1));
     });
-    document.querySelectorAll(".story").forEach(function (s) {
-      var own = " " + (s.getAttribute("data-tags") || "") + " ";
-      s.hidden = !((!cats.length || cats.indexOf(s.getAttribute("data-cat")) !== -1) &&
-                   tags.every(function (t) { return own.indexOf(" " + t + " ") !== -1; }));
-    });
     try { localStorage.setItem("trade-feed-category", JSON.stringify(chosen)); } catch (e) {}
+  }
+  // The latest stories, as the page was built (with this week's counts on the buttons).
+  function showFeed() {
+    results.hidden = true;
+    feed.hidden = false;
+    buttons.forEach(function (b) {
+      var k = b.getAttribute("data-cat"), base = +b.getAttribute("data-base") || 0, span = b.querySelector(".n");
+      if (span) span.textContent = base.toLocaleString();
+      b.hidden = k !== "all" && !base && chosen.indexOf(k) === -1;
+    });
+    document.querySelectorAll(".story").forEach(function (s) {
+      if (results.contains && results.contains(s)) return;
+      var e = { category: s.getAttribute("data-cat"), tags: (s.getAttribute("data-tags") || "").split(" ").filter(Boolean) };
+      s.hidden = !chosenMatch(e, chosen, isTag);
+    });
+  }
+  // Search results from the whole archive, in place of the latest stories.
+  function showSearch() {
+    var words = searchWords(query), mine = ++ticket;
+    feed.hidden = true;
+    results.hidden = false;
+    more.textContent = "";
+    list.innerHTML = '<p class="empty">Searching the archive…</p>';
+    loadIndex().then(function (idx) {
+      return Promise.all(Object.keys(idx.months || {}).map(loadMonth));
+    }).then(function (parts) {
+      if (mine !== ticket) return;
+      var pool = [];
+      parts.forEach(function (p) { pool = pool.concat(p.filter(function (e) { return matches(e, words); })); });
+      tallyButtons(buttons, pool, chosen);
+      var found = pool.filter(function (e) { return chosenMatch(e, chosen, isTag); });
+      found.sort(function (a, b) { return b.time - a.time; });
+      var shown = found.slice(0, 400);
+      list.innerHTML = shown.length ? shown.map(card).join("") : '<p class="empty">Nothing in the archive matches that.</p>';
+      more.textContent = found.length > shown.length
+        ? "Showing the newest 400 of " + found.length.toLocaleString() + " matches. Add a word to narrow it down."
+        : found.length + (found.length === 1 ? " match" : " matches") + " across the whole archive.";
+    }).catch(function () {
+      if (mine === ticket) list.innerHTML = '<p class="empty">The archive couldn’t be loaded. Try again in a minute.</p>';
+    });
+  }
+  function show() {
+    press();
+    if (query) showSearch(); else showFeed();
   }
   buttons.forEach(function (b) {
     b.addEventListener("click", function () {
@@ -1950,6 +2083,16 @@ $sources
       else chosen.splice(i, 1);
       show();
     });
+  });
+  input.addEventListener("input", function () {
+    clearTimeout(timer);
+    timer = setTimeout(function () {
+      var q = input.value.trim();
+      if (q === query) return;
+      query = q;
+      if (!query) ticket++;  // drop any search still loading
+      show();
+    }, 250);
   });
   try {
     var saved = localStorage.getItem("trade-feed-category") || "[]";
@@ -1980,105 +2123,51 @@ ARCHIVE = Template(r"""<!doctype html>
 <h1>Archive</h1>
 <p class="sub">$note</p>
 </header>
+<div class="sticky">
 <div class="controls">
-<input id="q" type="search" placeholder="Search titles, people, studios" autocomplete="off" enterkeyhint="search" aria-label="Search the archive">
+<input id="q" type="search" placeholder="Search the whole archive: titles, people, studios" autocomplete="off" enterkeyhint="search" aria-label="Search the whole archive">
 <select id="month" aria-label="Month"></select>
 </div>
 <nav aria-label="Filter by category">$chips</nav>
+</div>
 <main id="list"><p class="empty">Loading…</p></main>
 <p class="more" id="more"></p>
 $about
 <footer>$footer</footer>
 </div>
 <script>
-(function () {
+(function () {""" + SHARED_JS + r"""
   var zone = "$timezone";
   var cats = $cats;
   var tags = $tags;
   var list = document.getElementById("list"), more = document.getElementById("more");
   var input = document.getElementById("q"), select = document.getElementById("month");
   var buttons = document.querySelectorAll("nav button");
-  var view = { cats: [], month: "", q: "" }, months = [], counts = {}, cache = {}, ticket = 0, timer = null;
-  var dayKey = new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" });
-  var dayName = new Intl.DateTimeFormat("en-GB", { timeZone: zone, weekday: "short", day: "numeric", month: "short", year: "numeric" });
-  var clock = new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "numeric", minute: "2-digit" });
+  var view = { cats: [], month: "", q: "" }, months = [], counts = {}, ticket = 0, timer = null;
+  var isTag = tags;
   var monthName = new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", month: "long", year: "numeric" });
 
-  function esc(s) {
-    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
-      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
-    });
-  }
-  function link(u) { return /^https?:\/\//i.test(u || "") ? esc(u) : "#"; }
-  function load(m) {
-    if (!cache[m]) {
-      cache[m] = fetch("archive/" + m + ".json").then(function (r) {
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        return r.json();
-      });
-    }
-    return cache[m];
-  }
-  function card(e) {
-    var c = cats[e.category] || { emoji: "•", label: e.category, color: 0 };
-    var d = new Date(e.time * 1000);
-    // backfilled stories get their time once their page has been read; until then just the date
-    var when = " · " + dayName.format(d).replace(/,/g, "") + (e.rebuilt && !e.exact_time ? "" : ", " + clock.format(d).toLowerCase());
-    var out = '<article class="story" style="--c: var(--cat' + c.color + ')">' +
-      (link(e.image) !== "#" ? '<a class="photo" href="' + link(e.link) +
-        '" target="_blank" rel="noopener" tabindex="-1" aria-hidden="true"><img src="' + link(e.image) +
-        '" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.parentNode.remove()"></a>' : "") +
-      '<div class="meta">' +
-      '<span class="tag">' + esc(c.emoji + " " + c.label) + "</span>" +
-      (e.tags || []).filter(function (t) { return tags[t]; }).map(function (t) {
-        return '<span class="xtag">' + esc(tags[t].emoji + " " + tags[t].label) + "</span>";
-      }).join("") +
-      "<span>" + esc(e.outlet) + esc(when) + "</span>" +
-      (e.rebuilt && !e.page ? '<span class="rebuilt">title from link</span>' : "") + "</div>" +
-      '<h3><a href="' + link(e.link) + '" target="_blank" rel="noopener">' + esc(e.title) + "</a></h3>";
-    if (e.summary) out += '<p class="dek">' + esc(e.summary) + "</p>";
-    if (e.based_on) out += '<p class="basis">📖 Based on ' + esc(e.based_on) + "</p>";
-    if (e.also && e.also.length) {
-      out += '<p class="also">Also reported by ' + e.also.map(function (o) {
-        return '<a href="' + link(o.link) + '" target="_blank" rel="noopener">' + esc(o.outlet) + "</a>";
-      }).join(" · ") + "</p>";
-    }
-    return out + "</article>";
-  }
+  var card = makeCard(cats, tags, zone);
   function render(entries, words) {
     var out = entries.map(card);
     list.innerHTML = out.length ? out.join("") :
       '<p class="empty">' + (words.length ? "Nothing matches that search." : "Nothing here yet.") + "</p>";
   }
-  function matches(e, words) {
-    var hay = [e.title, e.outlet, e.based_on, e.project, e.company, (e.people || []).join(" ")].join(" ").toLowerCase();
-    return words.every(function (w) { return hay.indexOf(w) !== -1; });
-  }
   function refresh() {
-    var words = view.q.toLowerCase().split(/\s+/).filter(Boolean), mine = ++ticket;
+    var words = searchWords(view.q), mine = ++ticket;
     var wanted = words.length ? months : (view.month ? [view.month] : []);
     select.disabled = words.length > 0;
     more.textContent = "";
     if (!wanted.length) { list.innerHTML = '<p class="empty">Nothing in the archive yet.</p>'; return; }
     list.innerHTML = '<p class="empty">Loading…</p>';
-    Promise.all(wanted.map(load)).then(function (parts) {
+    Promise.all(wanted.map(loadMonth)).then(function (parts) {
       if (mine !== ticket) return;
       var all = [];
       parts.forEach(function (p) { all = all.concat(p); });
       // counts on the category buttons: this month (or these search results), every category
-      var pool = words.length ? all.filter(function (e) { return matches(e, words); }) : all, tally = { all: pool.length };
-      pool.forEach(function (e) {
-        tally[e.category] = (tally[e.category] || 0) + 1;
-        (e.tags || []).forEach(function (t) { tally[t] = (tally[t] || 0) + 1; });
-      });
-      buttons.forEach(function (b) {
-        var k = b.getAttribute("data-cat"), n = tally[k] || 0, span = b.querySelector(".n");
-        if (span) span.textContent = n.toLocaleString();
-        b.hidden = k !== "all" && !n && view.cats.indexOf(k) === -1;
-      });
-      all = all.filter(function (e) {
-        return chosenMatch(e) && (!words.length || matches(e, words));
-      });
+      var pool = words.length ? all.filter(function (e) { return matches(e, words); }) : all;
+      tallyButtons(buttons, pool, view.cats);
+      all = pool.filter(function (e) { return chosenMatch(e, view.cats, isTag); });
       all.sort(function (a, b) { return b.time - a.time; });
       var shown = words.length ? all.slice(0, 400) : all;  // a month shows in full; searches show the newest 400
       render(shown, words);
@@ -2091,7 +2180,7 @@ $about
       if (mine === ticket) list.innerHTML = '<p class="empty">The archive couldn’t be loaded. Try again in a minute.</p>';
     });
   }
-  fetch("archive/index.json").then(function (r) { return r.json(); }).then(function (idx) {
+  loadIndex().then(function (idx) {
     counts = idx.months || {};
     months = Object.keys(counts).sort().reverse();
     select.innerHTML = months.map(function (m) {
@@ -2107,12 +2196,6 @@ $about
     clearTimeout(timer);
     timer = setTimeout(function () { view.q = input.value.trim(); refresh(); }, 250);
   });
-  // Several buttons can be on at once: any chosen category, and every chosen tag. None = All.
-  function chosenMatch(e) {
-    var cats = view.cats.filter(function (k) { return !tags[k]; }), want = view.cats.filter(function (k) { return tags[k]; });
-    return (!cats.length || cats.indexOf(e.category) !== -1) &&
-      want.every(function (t) { return (e.tags || []).indexOf(t) !== -1; });
-  }
   buttons.forEach(function (b) {
     b.addEventListener("click", function () {
       var k = b.getAttribute("data-cat"), i = view.cats.indexOf(k);
