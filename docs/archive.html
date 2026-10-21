@@ -53,6 +53,10 @@ main .story:last-of-type { border-bottom: 0; }
 .empty { padding: 40px 0; color: var(--muted); text-align: center; }
 .more { margin: 20px 0 0; color: var(--muted); font-size: 14px; }
 .controls { display: flex; gap: 8px; margin: 4px 0 12px; }
+.sticky { position: sticky; top: 0; z-index: 2; margin: 0 -16px; padding: 10px 16px 0; background: var(--bg);
+  border-bottom: 1px solid var(--line); }
+.sticky .controls { margin: 0; }
+.sticky nav { position: static; margin: 0 -16px; border-bottom: 0; }
 .controls input, .controls select { min-width: 0; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px;
   background: var(--field); color: var(--text); font: inherit; font-size: 16px; }
 .controls input { flex: 1 1 auto; }
@@ -73,13 +77,15 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
 <header>
 <p class="kicker"><a href="./">← Latest stories</a></p>
 <h1>Archive</h1>
-<p class="sub">9,700 stories kept so far. Stories from before 16 October 2026 were filled in afterwards from each site&#x27;s list of articles. Their photos and headlines are added from the article page over the following runs; until then the title is rebuilt from the link.</p>
+<p class="sub">9,701 stories kept so far. Stories from before 16 October 2026 were filled in afterwards from each site&#x27;s list of articles. Their photos and headlines are added from the article page over the following runs; until then the title is rebuilt from the link.</p>
 </header>
+<div class="sticky">
 <div class="controls">
-<input id="q" type="search" placeholder="Search titles, people, studios" autocomplete="off" enterkeyhint="search" aria-label="Search the archive">
+<input id="q" type="search" placeholder="Search the whole archive: titles, people, studios" autocomplete="off" enterkeyhint="search" aria-label="Search the whole archive">
 <select id="month" aria-label="Month"></select>
 </div>
 <nav aria-label="Filter by category"><button type="button" data-cat="all" aria-pressed="true">All<span class="n"></span></button><button type="button" data-cat="ordered" aria-pressed="false">🟢 Ordered &amp; greenlit<span class="n"></span></button><button type="button" data-cat="casting" aria-pressed="false">🎭 Casting<span class="n"></span></button><button type="button" data-cat="creative" aria-pressed="false">🎥 Directors &amp; writers<span class="n"></span></button><button type="button" data-cat="adaptation" aria-pressed="false">📚 Rights &amp; adaptations<span class="n"></span></button><button type="button" data-cat="development" aria-pressed="false">🛠️ In development<span class="n"></span></button><button type="button" data-cat="renewal" aria-pressed="false">🔁 Renewal<span class="n"></span></button><button type="button" data-cat="deals" aria-pressed="false">🤝 Deals &amp; sales<span class="n"></span></button><button type="button" data-cat="release" aria-pressed="false">📅 Release &amp; first look<span class="n"></span></button><button type="button" data-cat="cancelled" aria-pressed="false">🛑 Cancelled &amp; exits<span class="n"></span></button><button type="button" data-cat="representation" aria-pressed="false">✍️ Representation<span class="n"></span></button><button type="button" data-cat="asian" aria-pressed="false">🌏 Asian<span class="n"></span></button></nav>
+</div>
 <main id="list"><p class="empty">Loading…</p></main>
 <p class="more" id="more"></p>
 <details><summary>About the archive</summary><ul><li>Kept indefinitely (change <code>archive_months</code> in config.yml).</li><li>Deadline: done</li><li>IndieWire: done</li><li>THR: done</li><li>TheWrap: done</li><li>Variety: done</li></ul></details>
@@ -87,93 +93,113 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
 </div>
 <script>
 (function () {
-  var zone = "Pacific/Auckland";
-  var cats = {"ordered": {"emoji": "🟢", "label": "Ordered & greenlit", "color": 0}, "casting": {"emoji": "🎭", "label": "Casting", "color": 1}, "creative": {"emoji": "🎥", "label": "Directors & writers", "color": 2}, "adaptation": {"emoji": "📚", "label": "Rights & adaptations", "color": 3}, "development": {"emoji": "🛠️", "label": "In development", "color": 4}, "renewal": {"emoji": "🔁", "label": "Renewal", "color": 5}, "deals": {"emoji": "🤝", "label": "Deals & sales", "color": 6}, "release": {"emoji": "📅", "label": "Release & first look", "color": 7}, "cancelled": {"emoji": "🛑", "label": "Cancelled & exits", "color": 8}, "representation": {"emoji": "✍️", "label": "Representation", "color": 9}};
-  var tags = {"asian": {"emoji": "🌏", "label": "Asian"}};
-  var list = document.getElementById("list"), more = document.getElementById("more");
-  var input = document.getElementById("q"), select = document.getElementById("month");
-  var buttons = document.querySelectorAll("nav button");
-  var view = { cats: [], month: "", q: "" }, months = [], counts = {}, cache = {}, ticket = 0, timer = null;
-  var dayKey = new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" });
-  var dayName = new Intl.DateTimeFormat("en-GB", { timeZone: zone, weekday: "short", day: "numeric", month: "short", year: "numeric" });
-  var clock = new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "numeric", minute: "2-digit" });
-  var monthName = new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", month: "long", year: "numeric" });
-
+  // Shared by the page and the archive: story cards, word search and loading the archive files.
   function esc(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
       return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
     });
   }
   function link(u) { return /^https?:\/\//i.test(u || "") ? esc(u) : "#"; }
-  function load(m) {
-    if (!cache[m]) {
-      cache[m] = fetch("archive/" + m + ".json").then(function (r) {
+  function makeCard(cats, tags, zone) {
+    var dayName = new Intl.DateTimeFormat("en-GB", { timeZone: zone, weekday: "short", day: "numeric", month: "short", year: "numeric" });
+    var clock = new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "numeric", minute: "2-digit" });
+    return function card(e) {
+      var c = cats[e.category] || { emoji: "•", label: e.category, color: 0 };
+      var d = new Date(e.time * 1000);
+      // backfilled stories get their time once their page has been read; until then just the date
+      var when = " · " + dayName.format(d).replace(/,/g, "") + (e.rebuilt && !e.exact_time ? "" : ", " + clock.format(d).toLowerCase());
+      var out = '<article class="story" style="--c: var(--cat' + c.color + ')">' +
+        (link(e.image) !== "#" ? '<a class="photo" href="' + link(e.link) +
+          '" target="_blank" rel="noopener" tabindex="-1" aria-hidden="true"><img src="' + link(e.image) +
+          '" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.parentNode.remove()"></a>' : "") +
+        '<div class="meta">' +
+        '<span class="tag">' + esc(c.emoji + " " + c.label) + "</span>" +
+        (e.tags || []).filter(function (t) { return tags[t]; }).map(function (t) {
+          return '<span class="xtag">' + esc(tags[t].emoji + " " + tags[t].label) + "</span>";
+        }).join("") +
+        "<span>" + esc(e.outlet) + esc(when) + "</span>" +
+        (e.rebuilt && !e.page ? '<span class="rebuilt">title from link</span>' : "") + "</div>" +
+        '<h3><a href="' + link(e.link) + '" target="_blank" rel="noopener">' + esc(e.title) + "</a></h3>";
+      if (e.summary) out += '<p class="dek">' + esc(e.summary) + "</p>";
+      if (e.based_on) out += '<p class="basis">📖 Based on ' + esc(e.based_on) + "</p>";
+      if (e.also && e.also.length) {
+        out += '<p class="also">Also reported by ' + e.also.map(function (o) {
+          return '<a href="' + link(o.link) + '" target="_blank" rel="noopener">' + esc(o.outlet) + "</a>";
+        }).join(" · ") + "</p>";
+      }
+      return out + "</article>";
+    };
+  }
+  function searchWords(q) { return String(q || "").toLowerCase().split(/\s+/).filter(Boolean); }
+  function matches(e, words) {
+    var hay = [e.title, e.outlet, e.based_on, e.project, e.company, (e.people || []).join(" ")].join(" ").toLowerCase();
+    return words.every(function (w) { return hay.indexOf(w) !== -1; });
+  }
+  // Any chosen category, and every chosen tag (Casting + Asian = Asian casting stories). None = all.
+  function chosenMatch(e, chosen, isTag) {
+    var cs = chosen.filter(function (k) { return !isTag[k]; }), ts = chosen.filter(function (k) { return isTag[k]; });
+    return (!cs.length || cs.indexOf(e.category) !== -1) &&
+      ts.every(function (t) { return (e.tags || []).indexOf(t) !== -1; });
+  }
+  var monthCache = {}, indexCache = null;
+  function loadIndex() {
+    if (!indexCache) indexCache = fetch("archive/index.json").then(function (r) { return r.json(); });
+    return indexCache;
+  }
+  function loadMonth(m) {
+    if (!monthCache[m]) {
+      monthCache[m] = fetch("archive/" + m + ".json").then(function (r) {
         if (!r.ok) throw new Error("HTTP " + r.status);
         return r.json();
       });
     }
-    return cache[m];
+    return monthCache[m];
   }
-  function card(e) {
-    var c = cats[e.category] || { emoji: "•", label: e.category, color: 0 };
-    var d = new Date(e.time * 1000);
-    // backfilled stories get their time once their page has been read; until then just the date
-    var when = " · " + dayName.format(d).replace(/,/g, "") + (e.rebuilt && !e.exact_time ? "" : ", " + clock.format(d).toLowerCase());
-    var out = '<article class="story" style="--c: var(--cat' + c.color + ')">' +
-      (link(e.image) !== "#" ? '<a class="photo" href="' + link(e.link) +
-        '" target="_blank" rel="noopener" tabindex="-1" aria-hidden="true"><img src="' + link(e.image) +
-        '" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.parentNode.remove()"></a>' : "") +
-      '<div class="meta">' +
-      '<span class="tag">' + esc(c.emoji + " " + c.label) + "</span>" +
-      (e.tags || []).filter(function (t) { return tags[t]; }).map(function (t) {
-        return '<span class="xtag">' + esc(tags[t].emoji + " " + tags[t].label) + "</span>";
-      }).join("") +
-      "<span>" + esc(e.outlet) + esc(when) + "</span>" +
-      (e.rebuilt && !e.page ? '<span class="rebuilt">title from link</span>' : "") + "</div>" +
-      '<h3><a href="' + link(e.link) + '" target="_blank" rel="noopener">' + esc(e.title) + "</a></h3>";
-    if (e.summary) out += '<p class="dek">' + esc(e.summary) + "</p>";
-    if (e.based_on) out += '<p class="basis">📖 Based on ' + esc(e.based_on) + "</p>";
-    if (e.also && e.also.length) {
-      out += '<p class="also">Also reported by ' + e.also.map(function (o) {
-        return '<a href="' + link(o.link) + '" target="_blank" rel="noopener">' + esc(o.outlet) + "</a>";
-      }).join(" · ") + "</p>";
-    }
-    return out + "</article>";
+  // Counts on the category buttons for a set of stories; empty categories hide unless chosen.
+  function tallyButtons(buttons, pool, chosen) {
+    var tally = { all: pool.length };
+    pool.forEach(function (e) {
+      tally[e.category] = (tally[e.category] || 0) + 1;
+      (e.tags || []).forEach(function (t) { tally[t] = (tally[t] || 0) + 1; });
+    });
+    buttons.forEach(function (b) {
+      var k = b.getAttribute("data-cat"), n = tally[k] || 0, span = b.querySelector(".n");
+      if (span) span.textContent = n.toLocaleString();
+      b.hidden = k !== "all" && !n && chosen.indexOf(k) === -1;
+    });
   }
+
+  var zone = "Pacific/Auckland";
+  var cats = {"ordered": {"emoji": "🟢", "label": "Ordered & greenlit", "color": 0}, "casting": {"emoji": "🎭", "label": "Casting", "color": 1}, "creative": {"emoji": "🎥", "label": "Directors & writers", "color": 2}, "adaptation": {"emoji": "📚", "label": "Rights & adaptations", "color": 3}, "development": {"emoji": "🛠️", "label": "In development", "color": 4}, "renewal": {"emoji": "🔁", "label": "Renewal", "color": 5}, "deals": {"emoji": "🤝", "label": "Deals & sales", "color": 6}, "release": {"emoji": "📅", "label": "Release & first look", "color": 7}, "cancelled": {"emoji": "🛑", "label": "Cancelled & exits", "color": 8}, "representation": {"emoji": "✍️", "label": "Representation", "color": 9}};
+  var tags = {"asian": {"emoji": "🌏", "label": "Asian"}};
+  var list = document.getElementById("list"), more = document.getElementById("more");
+  var input = document.getElementById("q"), select = document.getElementById("month");
+  var buttons = document.querySelectorAll("nav button");
+  var view = { cats: [], month: "", q: "" }, months = [], counts = {}, ticket = 0, timer = null;
+  var isTag = tags;
+  var monthName = new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", month: "long", year: "numeric" });
+
+  var card = makeCard(cats, tags, zone);
   function render(entries, words) {
     var out = entries.map(card);
     list.innerHTML = out.length ? out.join("") :
       '<p class="empty">' + (words.length ? "Nothing matches that search." : "Nothing here yet.") + "</p>";
   }
-  function matches(e, words) {
-    var hay = [e.title, e.outlet, e.based_on, e.project, e.company, (e.people || []).join(" ")].join(" ").toLowerCase();
-    return words.every(function (w) { return hay.indexOf(w) !== -1; });
-  }
   function refresh() {
-    var words = view.q.toLowerCase().split(/\s+/).filter(Boolean), mine = ++ticket;
+    var words = searchWords(view.q), mine = ++ticket;
     var wanted = words.length ? months : (view.month ? [view.month] : []);
     select.disabled = words.length > 0;
     more.textContent = "";
     if (!wanted.length) { list.innerHTML = '<p class="empty">Nothing in the archive yet.</p>'; return; }
     list.innerHTML = '<p class="empty">Loading…</p>';
-    Promise.all(wanted.map(load)).then(function (parts) {
+    Promise.all(wanted.map(loadMonth)).then(function (parts) {
       if (mine !== ticket) return;
       var all = [];
       parts.forEach(function (p) { all = all.concat(p); });
       // counts on the category buttons: this month (or these search results), every category
-      var pool = words.length ? all.filter(function (e) { return matches(e, words); }) : all, tally = { all: pool.length };
-      pool.forEach(function (e) {
-        tally[e.category] = (tally[e.category] || 0) + 1;
-        (e.tags || []).forEach(function (t) { tally[t] = (tally[t] || 0) + 1; });
-      });
-      buttons.forEach(function (b) {
-        var k = b.getAttribute("data-cat"), n = tally[k] || 0, span = b.querySelector(".n");
-        if (span) span.textContent = n.toLocaleString();
-        b.hidden = k !== "all" && !n && view.cats.indexOf(k) === -1;
-      });
-      all = all.filter(function (e) {
-        return chosenMatch(e) && (!words.length || matches(e, words));
-      });
+      var pool = words.length ? all.filter(function (e) { return matches(e, words); }) : all;
+      tallyButtons(buttons, pool, view.cats);
+      all = pool.filter(function (e) { return chosenMatch(e, view.cats, isTag); });
       all.sort(function (a, b) { return b.time - a.time; });
       var shown = words.length ? all.slice(0, 400) : all;  // a month shows in full; searches show the newest 400
       render(shown, words);
@@ -186,7 +212,7 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
       if (mine === ticket) list.innerHTML = '<p class="empty">The archive couldn’t be loaded. Try again in a minute.</p>';
     });
   }
-  fetch("archive/index.json").then(function (r) { return r.json(); }).then(function (idx) {
+  loadIndex().then(function (idx) {
     counts = idx.months || {};
     months = Object.keys(counts).sort().reverse();
     select.innerHTML = months.map(function (m) {
@@ -202,12 +228,6 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
     clearTimeout(timer);
     timer = setTimeout(function () { view.q = input.value.trim(); refresh(); }, 250);
   });
-  // Several buttons can be on at once: any chosen category, and every chosen tag. None = All.
-  function chosenMatch(e) {
-    var cats = view.cats.filter(function (k) { return !tags[k]; }), want = view.cats.filter(function (k) { return tags[k]; });
-    return (!cats.length || cats.indexOf(e.category) !== -1) &&
-      want.every(function (t) { return (e.tags || []).indexOf(t) !== -1; });
-  }
   buttons.forEach(function (b) {
     b.addEventListener("click", function () {
       var k = b.getAttribute("data-cat"), i = view.cats.indexOf(k);
