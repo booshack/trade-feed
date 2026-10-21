@@ -1871,7 +1871,7 @@ SHARED_JS = r"""
   }
   function searchWords(q) { return String(q || "").toLowerCase().split(/\s+/).filter(Boolean); }
   function matches(e, words) {
-    var hay = [e.title, e.outlet, e.based_on, e.project, e.company, (e.people || []).join(" ")].join(" ").toLowerCase();
+    var hay = [e.title, e.summary, e.outlet, e.based_on, e.project, e.company, (e.people || []).join(" ")].join(" ").toLowerCase();
     return words.every(function (w) { return hay.indexOf(w) !== -1; });
   }
   // Any chosen category, and every chosen tag (Casting + Asian = Asian casting stories). None = all.
