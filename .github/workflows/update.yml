@@ -40,6 +40,7 @@ jobs:
       - run: pip install -r requirements.txt
 
       - name: Check the trades
+        id: check
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           RECHECK: ${{ inputs.recheck }}
@@ -47,7 +48,8 @@ jobs:
 
       - name: Save what changed
         id: save
-        if: ${{ !cancelled() }}
+        # Never save or publish files after the feed check fails.
+        if: ${{ success() }}
         run: |
           git add -A docs state.json
           git add -A backfill.json 2>/dev/null || true
