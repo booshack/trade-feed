@@ -782,6 +782,9 @@ def record_usage(meta: dict, usage: dict, now: float) -> None:
 # ------------------------------------------------------------------ merging duplicates
 
 SUFFIXES = {"jr", "sr", "ii", "iii", "iv"}
+MISSING_VALUES = {"", "na", "n a", "none", "null", "tbd", "unknown"}
+REPORT_FIELDS = ("id", "published", "category", "title", "link", "outlet", "feed", "summary",
+                 "based_on", "project", "company", "people", "tags", "image", "rebuilt", "exact_time", "page")
 
 
 def norm(s) -> str:
@@ -792,31 +795,119 @@ def norm(s) -> str:
     return re.sub(r"^(the|a|an) ", "", s)
 
 
-def surnames(people) -> set[str]:
-    out = set()
-    for person in people or []:
-        parts = [p for p in norm(person).split() if p not in SUFFIXES]
-        if parts:
-            out.add(parts[-1])
-    return out
+def normalized_person(person) -> str:
+    """Normalize a full person name without reducing it to a surname.
+
+    Person identity is deliberately stricter than project/title normalization: a
+    shared surname is not evidence that two reports concern the same person.
+    """
+    text = unicodedata.normalize("NFKD", str(person or ""))
+    text = "".join(c for c in text if not unicodedata.combining(c)).lower()
+    text = re.sub(r"[^a-z0-9 ]+", " ", text)
+    parts = [p for p in re.sub(r"\s+", " ", text).strip().split() if p not in SUFFIXES]
+    return " ".join(parts)
+
+
+def person_names(people) -> set[str]:
+    if isinstance(people, str):
+        people = [people]
+    return {name for name in (normalized_person(p) for p in (people or [])) if name}
+
+
+def field_value(value) -> str:
+    """Normalize an identity field, treating classifier placeholders as missing."""
+    value = norm(value)
+    if value.startswith("untitled") or value in MISSING_VALUES:
+        return ""
+    return value
 
 
 def similar(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, a, b).ratio() if a and b else 0.0
 
 
+def event_similarity(a: dict, b: dict) -> float:
+    """Similarity used only as supporting evidence after identity is established."""
+    titles = similar(norm(a.get("title")), norm(b.get("title")))
+    summaries = similar(norm(a.get("summary")), norm(b.get("summary")))
+    combined = similar(" ".join(filter(None, (norm(a.get("title")), norm(a.get("summary"))))),
+                       " ".join(filter(None, (norm(b.get("title")), norm(b.get("summary"))))))
+    return max(titles, summaries, combined)
+
+
 def same_news(a: dict, b: dict) -> bool:
+    """Return whether two reports are conservatively about the same news event.
+
+    This is the one merge policy used by both the live feed and the archive. A
+    headline score is never sufficient by itself; it can only support matching
+    identity, project, company, or source-material evidence.
+    """
     if a.get("category") != b.get("category"):
         return False
-    pa, pb = (p if not p.startswith("untitled") else "" for p in (norm(a.get("project")), norm(b.get("project"))))
-    project = similar(pa, pb)
-    shared_people = bool(surnames(a.get("people")) & surnames(b.get("people")))
-    if a["category"] in ("casting", "creative"):
-        return shared_people and (project >= 0.8 or not (pa and pb))
-    if pa and pb:
-        return project >= 0.85
-    same_company = bool(norm(a.get("company"))) and norm(a.get("company")) == norm(b.get("company"))
-    return similar(norm(a["title"]), norm(b["title"])) >= 0.6 or (shared_people and same_company)
+    if not a.get("category"):
+        return False
+
+    pa, pb = field_value(a.get("project")), field_value(b.get("project"))
+    ca, cb = field_value(a.get("company")), field_value(b.get("company"))
+    ba, bb = field_value(a.get("based_on")), field_value(b.get("based_on"))
+    shared_people = bool(person_names(a.get("people")) & person_names(b.get("people")))
+    event = event_similarity(a, b)
+    category = a["category"]
+
+    if category == "representation":
+        # Representation is an identity-plus-agency event. Template-like
+        # headlines must never bridge different people or agencies.
+        return (len(person_names(a.get("people"))) == 1
+                and person_names(a.get("people")) == person_names(b.get("people"))
+                and bool(ca) and ca == cb)
+
+    if category in ("casting", "creative"):
+        if not shared_people:
+            return False
+        if pa and pb:
+            return pa == pb and event >= 0.55
+        # Missing project metadata is allowed only with a very strong event
+        # description; a person alone is not enough.
+        return event >= 0.86
+
+    if category == "adaptation":
+        if ba and bb:
+            if ba != bb or (ca and cb and ca != cb):
+                return False
+            return event >= 0.55
+        if pa and pb:
+            if pa != pb or (ca and cb and ca != cb):
+                return False
+            return event >= 0.65
+        return False
+
+    # For every other category, a known project is a required identity signal.
+    # If it is absent, require a full person, company, and event match.
+    if pa or pb:
+        return bool(pa and pb and pa == pb and (not ca or not cb or ca == cb) and event >= 0.55)
+    return bool(shared_people and ca and cb and ca == cb and event >= 0.78)
+
+
+def report_keys(report: dict) -> set[tuple[str, str]]:
+    keys = set()
+    if report.get("id"):
+        keys.add(("id", str(report["id"])))
+    link = clean_link(report.get("link"))
+    if link:
+        parts = urlsplit(link)
+        keys.add(("url", urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"), parts.query, ""))))
+    return keys
+
+
+def same_report(a: dict, b: dict) -> bool:
+    return bool(report_keys(a) & report_keys(b))
+
+
+def story_reports(story: dict) -> list[dict]:
+    """All member reports, with compatibility for stories made before `reports`."""
+    if story.get("reports"):
+        return story["reports"]
+    return [story["main"], *story.get("merged", []), *story.get("also", [])]
 
 
 def build_stories(items: dict) -> list[dict]:
@@ -828,30 +919,38 @@ def build_stories(items: dict) -> list[dict]:
         for story in reversed(stories):
             if t - item_time(story["main"]) > DUPE_HOURS * 3600:
                 break
-            if same_news(story["main"], it) or any(same_news(o, it) for o in story["also"]):
+            if any(same_news(report, it) for report in story_reports(story)):
                 match = story
                 break
         if match is None:
-            stories.append({"main": it, "also": [], "merged": []})
+            stories.append({"main": it, "also": [], "merged": [], "reports": [it]})
+            continue
+        if any(same_report(report, it) for report in story_reports(match)):
             continue
         match["merged"].append(it)
-        if it["outlet"] != match["main"]["outlet"] and all(o["outlet"] != it["outlet"] for o in match["also"]):
-            match["also"].append(it)
+        match["also"].append(it)
+        match["reports"].append(it)
     stories.sort(key=lambda s: (item_time(s["main"]), s["main"]["id"]), reverse=True)
     return stories
 
 
 def story_photo(story: dict) -> str:
-    """The lead report's photo, or failing that one from another outlet's report."""
-    return next((it["image"] for it in [story["main"], *story["merged"]] if it.get("image")), "")
+    """Prefer the lead photo, then use any member report as a fallback."""
+    return next((it.get("image") for it in story_reports(story) if it.get("image")), "")
 
 
 def story_tags(story: dict) -> list[str]:
     """Extra tags from any report of the story, in the order they first appear."""
     out: list[str] = []
-    for it in [story["main"], *story["merged"]]:
+    for it in story_reports(story):
         out += [t for t in it.get("tags") or [] if t not in out]
     return out
+
+
+def alternate_label(report: dict) -> str:
+    outlet = str(report.get("outlet") or "Publication")
+    title = str(report.get("title") or "").strip()
+    return f"{outlet}: {title}" if title else outlet
 
 
 def tag_spans(keys: list[str], tags: dict) -> str:
@@ -899,9 +998,18 @@ class Archive:
 
     def put(self, entry: dict) -> None:
         month = self.month_of(entry["time"])
+        existing = self.load(month).get(entry["id"])
+        if existing and existing is not entry:
+            entry = merge_archive_entries(existing, entry)
         self.load(month)[entry["id"]] = entry
         self.timeline.pop(month, None)
         self.dirty.add(month)
+        self._touch_records(entry)
+
+    def _touch_records(self, entry: dict) -> None:
+        for report in archive_reports(entry):
+            if report.get("time"):
+                self.dirty.add(self.month_of(report["time"]))
 
     def touch(self, entry: dict) -> None:
         self.dirty.add(self.month_of(entry["time"]))
@@ -925,31 +1033,36 @@ class Archive:
 
     def add(self, entry: dict) -> bool:
         """Adds a backfilled story, or merges it into a story already there. True if new."""
-        people, project = surnames(entry.get("people")), norm(entry.get("project"))
-        words = set(re.findall(r"[a-z0-9]{4,}", norm(entry["title"])))
         for other in self.near(entry["time"]):
-            if other["id"] == entry["id"]:
+            if any(same_report(report, entry) for report in archive_reports(other)):
+                self.replace_entry(other, merge_archive_entries(other, entry))                 
                 return False
-            if other.get("category") != entry["category"]:
-                continue
-            if not (people & surnames(other.get("people")) or (project and project == norm(other.get("project")))
-                    or len(words & set(re.findall(r"[a-z0-9]{4,}", norm(other["title"])))) >= 3):
-                continue
-            if same_news(other, entry):
-                if entry["time"] < other["time"] and other.get("rebuilt"):
-                    # the earlier report leads, as on the live feed
-                    also = [{"outlet": other["outlet"], "link": other["link"]}] + other.get("also", [])
-                    entry = {**entry, "also": [a for a in also if a["outlet"] != entry["outlet"]]}
-                    self.remove(other["id"], other["time"])
-                    self.put(entry)
-                    return False
-                outlets = {other["outlet"]} | {a["outlet"] for a in other.get("also", [])}
-                if entry["outlet"] not in outlets:
-                    other.setdefault("also", []).append({"outlet": entry["outlet"], "link": entry["link"]})
-                    self.touch(other)
+            if any(same_news(report, entry) for report in archive_reports(other) if report.get("category")):
+                self.replace_entry(other, merge_archive_entries(other, entry))
                 return False
         self.put(entry)
         return True
+
+    def replace_entry(self, old: dict, new: dict) -> None:
+        """Replace an archive entry while marking every affected month dirty."""
+        self.remove(old["id"], old["time"])
+        self.put(new)
+
+    def entries_for_records(self, records: list[dict]) -> list[dict]:
+        keys = set().union(*(report_keys(r) for r in records))
+        return [entry for entries in self.months.values() for entry in entries.values()
+                if keys & set().union(*(report_keys(r) for r in archive_reports(entry)))]
+
+    def coalesce(self, entry: dict, records: list[dict]) -> dict:
+        """Merge all loaded archive entries containing known members of one story."""
+        matches = self.entries_for_records(records)
+        combined = entry
+        for old in matches:
+            combined = merge_archive_entries(combined, old)
+        for old in matches:
+            self.remove(old["id"], old["time"])
+        self.put(combined)
+        return combined
 
     def save(self, keep_months: int, now: float) -> dict[str, int]:
         index_path = ARCHIVE_DIR / "index.json"
@@ -974,28 +1087,92 @@ class Archive:
         return counts
 
 
+def archive_record(report: dict) -> dict:
+    out = {k: report[k] for k in REPORT_FIELDS if k in report and report[k] not in (None, "", [])}
+    out["id"] = report.get("id") or article_id(report.get("link", ""))
+    out["time"] = item_time(report)
+    return out
+
+
+def archive_reports(entry: dict) -> list[dict]:
+    lead = {k: v for k, v in entry.items() if k != "also"}
+    return [lead, *(entry.get("also") or [])]
+
+
+def merge_archive_entries(left: dict, right: dict) -> dict:
+    """Combine entries without losing legacy/minimal alternate links."""
+    records: list[dict] = []
+    for report in archive_reports(left) + archive_reports(right):
+        record = dict(report)
+        for old in records:
+            if same_report(old, record):
+                old.update({k: v for k, v in record.items() if v not in (None, "", [])})
+                break
+        else:
+            records.append(record)
+    full = [r for r in records if r.get("category") and r.get("title") and r.get("link")]
+    lead = min(full or records, key=lambda r: (int(r.get("time") or 0), str(r.get("id") or r.get("link") or "")))
+    merged = dict(lead)
+    merged["time"] = int(lead.get("time") or 0)
+    alternates = [r for r in records if not same_report(r, lead)]
+    if alternates:
+        merged["also"] = alternates
+    else:
+        merged.pop("also", None)
+    return merged
+
+
 def entry_from_story(story: dict) -> dict:
-    m = story["main"]
-    entry = {"id": m["id"], "time": item_time(m), "category": m["category"], "title": m["title"],
-             "link": m["link"], "outlet": m["outlet"]}
-    for k in ("summary", "based_on", "project", "company", "people"):
-        if m.get(k):
-            entry[k] = m[k]
-    if story_tags(story):
-        entry["tags"] = story_tags(story)
-    if story_photo(story):
-        entry["image"] = story_photo(story)
-    if story["also"]:
-        entry["also"] = [{"outlet": o["outlet"], "link": o["link"]} for o in story["also"]]
+    reports = story_reports(story)
+    entry = archive_record(reports[0])
+    alternates = []
+    for report in reports[1:]:
+        if not any(same_report(report, old) for old in [reports[0], *alternates]):
+            alternates.append(archive_record(report))
+    if alternates:
+        entry["also"] = alternates
     return entry
 
 
 def sync_archive(archive: Archive, stories: list[dict], items: dict) -> None:
     """Copies the stories still held in state into the archive, as they currently stand."""
+    # Load the months represented by retained records. This lets a repair remove
+    # a known false alternate without touching older entries whose source record
+    # is no longer available.
+    for it in items.values():
+        if it.get("status") == "kept" and item_time(it):
+            archive.load(archive.month_of(item_time(it)))
+
+    owners = {}
+    for story_number, story in enumerate(stories):
+        for report in story_reports(story):
+            for key in report_keys(report):
+                owners[key] = story_number
+
+    # A legacy alternate can be removed only when its complete source record is
+    # still in state and the corrected story groups prove it belongs elsewhere.
+    for month, entries in list(archive.months.items()):
+        for entry in list(entries.values()):
+            lead_owner = next((owners.get(k) for k in report_keys(entry) if k in owners), None)
+            kept_also = []
+            changed = False
+            for report in entry.get("also") or []:
+                report_owners = {owners[k] for k in report_keys(report) if k in owners}
+                if lead_owner is not None and report_owners and report_owners != {lead_owner}:
+                    changed = True
+                    continue
+                kept_also.append(report)
+            if changed:
+                if kept_also:
+                    entry["also"] = kept_also
+                else:
+                    entry.pop("also", None)
+                archive.timeline.pop(month, None)
+                archive.dirty.add(month)
+
     for story in stories:
-        archive.put(entry_from_story(story))
-        for other in story["merged"]:
-            archive.remove(other["id"], item_time(other))
+        entry = entry_from_story(story)
+        archive.coalesce(entry, story_reports(story))
     for it in items.values():
         if it["status"] in ("rejected", "error") and it.get("title"):
             archive.remove(it["id"], item_time(it))
@@ -1645,7 +1822,7 @@ def render_feed(stories: list[dict], cfg: dict, site: dict) -> str:
         if m.get("based_on"):
             body.append(f"<p>📖 Based on {h(m['based_on'])}</p>")
         if story["also"]:
-            links = " · ".join(f'<a href="{h(o["link"])}">{h(o["outlet"])}</a>' for o in story["also"])
+            links = " · ".join(f'<a href="{h(o["link"])}">{h(alternate_label(o))}</a>' for o in story["also"])
             body.append(f"<p>Also reported by {links}</p>")
         out += ["<item>",
                 f"<title>{x(cat['emoji'] + ' ' + m['title'] + ' · ' + m['outlet'])}</title>",
@@ -1735,7 +1912,7 @@ def render_page(stories, items, meta, cfg, site, labels, now, backfill) -> str:
         if m.get("based_on"):
             card.append(f'<p class="basis">📖 Based on {h(m["based_on"])}</p>')
         if story["also"]:
-            links = " · ".join(f'<a href="{h(o["link"])}" target="_blank" rel="noopener">{h(o["outlet"])}</a>'
+            links = " · ".join(f'<a href="{h(o["link"])}" target="_blank" rel="noopener">{h(alternate_label(o))}</a>'
                                for o in story["also"])
             card.append(f'<p class="also">Also reported by {links}</p>')
         card.append("</article>")
@@ -1863,7 +2040,9 @@ SHARED_JS = r"""
       if (e.based_on) out += '<p class="basis">📖 Based on ' + esc(e.based_on) + "</p>";
       if (e.also && e.also.length) {
         out += '<p class="also">Also reported by ' + e.also.map(function (o) {
-          return '<a href="' + link(o.link) + '" target="_blank" rel="noopener">' + esc(o.outlet) + "</a>";
+          var label = o.outlet || "Publication";
+          if (o.title) label += ": " + o.title;
+          return '<a href="' + link(o.link) + '" target="_blank" rel="noopener">' + esc(label) + "</a>";
         }).join(" · ") + "</p>";
       }
       return out + "</article>";
@@ -2345,6 +2524,7 @@ def main() -> int:
     global SHOW_API_CALLS
     cfg = load_config()
     SHOW_API_CALLS = cfg["show_api_calls"]
+    repair_only = os.environ.get("REPAIR_ONLY", "").strip().lower() in ("1", "true", "yes")
     brief = load_brief()
     first_run = not STATE_FILE.exists()
     state = load_state()
@@ -2356,56 +2536,57 @@ def main() -> int:
     key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
 
     forced = os.environ.get("RECHECK", "").strip().lower() in ("1", "true", "yes")
-    rechecking = mark_recheck(items, meta, criteria_signature(brief, cfg), now, forced)
+    rechecking = (mark_recheck(items, meta, criteria_signature(brief, cfg), now, forced)
+                  if not repair_only else 0)
     if rechecking:
         print(f"The brief changed: re-checking {rechecking} recent articles.")
         summary.append(f"- Brief changed: re-checking {rechecking} recent articles")
 
-    known = set(items)
-    oldest_wanted = now - MAX_AGE_DAYS * 86400
-
-    posts = known_posts(items)
-
-    def is_known(a: dict) -> bool:
-        return (a["id"] in known or post_key(a["link"]) in posts
-                or bool(a["published"] and a["published"] < oldest_wanted))
-
-    health_book = meta.setdefault("feeds", {})
     fresh = 0
-    for feed in cfg["feeds"]:
-        health = health_book.setdefault(feed["url"], {})
-        label = labels[feed["url"]]
-        try:
-            articles, overflow = read_feed(feed, is_known, first_time=not health.get("loaded"))
-        except FetchError as e:
-            health.setdefault("failing_since", int(now))
-            health["error"] = str(e)
-            print(f"✗ {label}: {e}")
-            summary.append(f"- ✗ {label}: {e}")
-            continue
-        added = intake(articles, items, now, posts)
-        fresh += added
-        health.pop("error", None)
-        health.pop("failing_since", None)
-        health["loaded"] = True
-        newest = max((min(a["published"], int(now)) for a in articles if a["published"]), default=0)
-        if newest > health.get("newest", 0):
-            health["newest"] = newest
-        if overflow:
-            health["overflow_at"] = int(now)
-        print(f"✓ {label}: {len(articles)} articles, {added} new" + (" (some may have been missed)" if overflow else ""))
-    for url in list(health_book):
-        if url not in labels:
-            del health_book[url]
-    swept = sweep(cfg, items, meta, now, print)
-    fresh += swept
-    if swept:
-        summary.append(f"- Safety-net sweep: {swept} articles the feeds missed")
+    if not repair_only:
+        known = set(items)
+        oldest_wanted = now - MAX_AGE_DAYS * 86400
+        posts = known_posts(items)
+
+        def is_known(a: dict) -> bool:
+            return (a["id"] in known or post_key(a["link"]) in posts
+                    or bool(a["published"] and a["published"] < oldest_wanted))
+
+        health_book = meta.setdefault("feeds", {})
+        for feed in cfg["feeds"]:
+            health = health_book.setdefault(feed["url"], {})
+            label = labels[feed["url"]]
+            try:
+                articles, overflow = read_feed(feed, is_known, first_time=not health.get("loaded"))
+            except FetchError as e:
+                health.setdefault("failing_since", int(now))
+                health["error"] = str(e)
+                print(f"✗ {label}: {e}")
+                summary.append(f"- ✗ {label}: {e}")
+                continue
+            added = intake(articles, items, now, posts)
+            fresh += added
+            health.pop("error", None)
+            health.pop("failing_since", None)
+            health["loaded"] = True
+            newest = max((min(a["published"], int(now)) for a in articles if a["published"]), default=0)
+            if newest > health.get("newest", 0):
+                health["newest"] = newest
+            if overflow:
+                health["overflow_at"] = int(now)
+            print(f"✓ {label}: {len(articles)} articles, {added} new" + (" (some may have been missed)" if overflow else ""))
+        for url in list(health_book):
+            if url not in labels:
+                del health_book[url]
+        swept = sweep(cfg, items, meta, now, print)
+        fresh += swept
+        if swept:
+            summary.append(f"- Safety-net sweep: {swept} articles the feeds missed")
 
     usage = {"input": 0, "output": 0}
     live_verdicts: list[dict] = []
     past_verdicts: list[dict] = []
-    queued = waiting(items)
+    queued = waiting(items) if not repair_only else []
     problem = None
     if queued:
         if not key:
@@ -2420,14 +2601,15 @@ def main() -> int:
         meta["api"].pop("alerted", None)
         exit_code = 0
 
-    find_photos(items, print)
-    prune(items, now)
+    if not repair_only:
+        find_photos(items, print)
+        prune(items, now)
     stories = build_stories(items)
     archive = Archive(cfg["tz"])
     sync_archive(archive, stories, items)
 
     backfill = load_backfill()
-    if cfg["backfill_days"] and key and not (problem and problem.urgent):
+    if not repair_only and cfg["backfill_days"] and key and not (problem and problem.urgent):
         print("Backfill (older articles, judged from their links):")
         backfill, trouble = run_backfill(cfg, brief, items, archive, key, usage, time.time() + BACKFILL_SECONDS, print,
                                          past_verdicts)
@@ -2435,7 +2617,7 @@ def main() -> int:
             exit_code = max(exit_code, record_api(meta, trouble, attempted=True, now=now))
         summary.append(f"- Backfill: {round(backfill_progress(backfill) * 100)}% done, "
                        f"{backfill.get('kept', 0):,} older stories added so far")
-    if backfill.get("until"):
+    if not repair_only and backfill.get("until"):
         # a few minutes while the backfill is still going, the backfill's whole slot once it's done
         budget = PREVIEW_SECONDS if backfill.get("state") != "done" else BACKFILL_SECONDS
         now_ = time.time()
@@ -2472,3 +2654,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
