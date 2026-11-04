@@ -77,7 +77,7 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
 <header>
 <p class="kicker"><a href="./">← Latest stories</a></p>
 <h1>Archive</h1>
-<p class="sub">10,211 stories kept so far. Stories from before 16 October 2026 were filled in afterwards from each site&#x27;s list of articles. Their photos and headlines are added from the article page over the following runs; until then the title is rebuilt from the link.</p>
+<p class="sub">10,310 stories kept so far.</p>
 </header>
 <div class="sticky">
 <div class="controls">
@@ -88,8 +88,8 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
 </div>
 <main id="list"><p class="empty">Loading…</p></main>
 <p class="more" id="more"></p>
-<details><summary>About the archive</summary><ul><li>Kept indefinitely (change <code>archive_months</code> in config.yml).</li><li>Deadline: done</li><li>IndieWire: done</li><li>THR: done</li><li>TheWrap: done</li><li>Variety: done</li></ul></details>
-<footer><a href="./">Latest stories</a> · <a href="feed.xml">RSS feed</a> · <a href="https://github.com/booshack/trade-feed">Repo</a></footer>
+<details><summary>About the archive</summary><ul><li>Kept indefinitely (change <code>archive_months</code> in config.yml).</li></ul></details>
+<footer><a href="./">Latest stories</a> · <a href="feed.xml">RSS feed</a></footer>
 </div>
 <script>
 (function () {
@@ -124,7 +124,9 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
       if (e.based_on) out += '<p class="basis">📖 Based on ' + esc(e.based_on) + "</p>";
       if (e.also && e.also.length) {
         out += '<p class="also">Also reported by ' + e.also.map(function (o) {
-          return '<a href="' + link(o.link) + '" target="_blank" rel="noopener">' + esc(o.outlet) + "</a>";
+          var label = o.outlet || "Publication";
+          if (o.title) label += ": " + o.title;
+          return '<a href="' + link(o.link) + '" target="_blank" rel="noopener">' + esc(label) + "</a>";
         }).join(" · ") + "</p>";
       }
       return out + "</article>";
@@ -245,3 +247,4 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
 </script>
 </body>
 </html>
+
